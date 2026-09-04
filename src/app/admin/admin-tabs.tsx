@@ -7,7 +7,7 @@ import { cn } from "@/lib/util";
 const TABS = [
   { href: "/admin", label: "Applications" },
   { href: "/admin/venues", label: "Venues" },
-  { href: "/admin/admins", label: "Admins" },
+  { href: "/admin/admins", label: "Accounts" },
 ] as const;
 
 /** Section switcher for the platform admin panel. */
