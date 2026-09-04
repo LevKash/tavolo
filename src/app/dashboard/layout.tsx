@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { venues } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import DashNav from "./dash-nav";
+import ReviewGate from "./review-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,12 @@ export default async function DashboardLayout({
     .where(eq(venues.owner_id, user.id))
     .limit(1);
   const venue = venueRows[0];
+
+  // Venue still in the approval queue or declined — show the review screen
+  // instead of the app (all /dashboard/* routes stay unreachable).
+  if (venue && venue.status !== "active") {
+    return <ReviewGate status={venue.status} venueName={venue.name} />;
+  }
 
   return (
     <div className="flex min-h-screen">
@@ -40,6 +47,7 @@ export default async function DashboardLayout({
         <DashNav
           slug={venue?.slug ?? ""}
           userName={user.name}
+          isAdmin={user.is_admin}
         />
       </aside>
       <main className="ml-60 min-w-0 flex-1 bg-ink">

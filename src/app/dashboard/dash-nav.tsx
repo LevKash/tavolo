@@ -13,10 +13,14 @@ const LINKS = [
   { href: "/dashboard/settings", label: "Settings", icon: "⚙️" },
 ];
 
-export default function DashNav(props: { slug: string; userName: string }) {
+export default function DashNav(props: {
+  slug: string;
+  userName: string;
+  isAdmin?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
-  const { slug, userName } = props;
+  const { slug, userName, isAdmin } = props;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -43,6 +47,26 @@ export default function DashNav(props: { slug: string; userName: string }) {
           );
         })}
       </nav>
+
+      {isAdmin && (
+        <div className="mt-6 border-t border-line pt-4">
+          <p className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-fog-2">
+            Admin
+          </p>
+          <Link
+            href="/admin"
+            className={cn(
+              "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors",
+              pathname.startsWith("/admin")
+                ? "border border-gold/30 bg-gold/10 text-gold-2"
+                : "text-fog hover:bg-white/[0.04] hover:text-cream",
+            )}
+          >
+            <span className="text-base">🛎</span>
+            Applications
+          </Link>
+        </div>
+      )}
 
       {slug && (
         <div className="mt-6 rounded-xl border border-line p-3 text-xs">

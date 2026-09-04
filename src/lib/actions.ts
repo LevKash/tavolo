@@ -23,6 +23,7 @@ import {
 } from "@/lib/auth";
 import { closeTableSession, openSessionForTable } from "@/lib/core";
 import { ensureSeeded } from "@/lib/seed";
+import { notifyOperator } from "@/lib/tg";
 import { slugify } from "@/lib/util";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -50,6 +51,9 @@ async function getOwnerVenue(): Promise<Venue> {
     .where(eq(venues.owner_id, user.id))
     .limit(1);
   if (rows.length === 0) redirect("/");
+  // While pending/rejected the venue is read-only — bounce every edit to the
+  // dashboard, whose layout renders the review screen instead of the app.
+  if (rows[0].status !== "active") redirect("/dashboard");
   return rows[0];
 }
 
@@ -112,6 +116,9 @@ export async function signupAction(input: {
         name: venueName,
         tagline: "Welcome — edit your venue details in Settings",
         bar_pin: "1234",
+        // New venues start unpublished and gated behind the approval queue.
+        is_published: false,
+        status: "pending",
       })
       .returning();
     await db.insert(tables).values(
@@ -123,6 +130,14 @@ export async function signupAction(input: {
     );
     const token = await createSessionToken(user[0].id);
     await setSessionCookie(token);
+    await notifyOperator(
+      [
+        "🆕 Ordavo — new venue application",
+        `${venueName}  (${slug})`,
+        `${name} — ${email}`,
+        "https://ordavo.app/admin",
+      ].join("\n"),
+    );
   } catch (err) {
     if (uniqueViolation(err)) return { error: "Email or venue URL already in use." };
     return { error: errText(err) };
@@ -470,4 +485,34 @@ export async function purgeTableSessionsAction(tableId: string): Promise<ActionR
     );
   revalidatePath("/dashboard");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- admin queue
+
+async function requireAdmin() {
+  const user = await requireUser();
+  if (!user.is_admin) redirect("/dashboard");
+  return user;
+}
+
+async function reviewVenue(venueId: string, status: "active" | "rejected") {
+  await requireAdmin();
+  if (!venueId) return { error: "Missing venue id." };
+  const rows = await db
+    .update(venues)
+    .set({ status })
+    .where(and(eq(venues.id, venueId), eq(venues.status, "pending")))
+    .returning({ id: venues.id });
+  if (rows.length === 0) return { error: "Venue not found or already reviewed." };
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
+
+export async function approveVenueAction(venueId: string): Promise<ActionRes> {
+  return reviewVenue(venueId, "active");
+}
+
+export async function rejectVenueAction(venueId: string): Promise<ActionRes> {
+  return reviewVenue(venueId, "rejected");
 }

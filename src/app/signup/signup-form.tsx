@@ -83,8 +83,9 @@ export default function SignupForm() {
         {busy ? "Creating your venue…" : "Create venue & dashboard"}
       </button>
       <p className="text-center text-[11px] text-fog-2">
-        Your guest menu will be live immediately at your new URL. Tables 1–8 and
-        “Bar” are created for you — edit them anytime.
+        Every venue is reviewed by our team before going live — you&apos;ll get an
+        email as soon as yours is approved. Tables 1–8 and “Bar” are created for
+        you — edit them anytime.
       </p>
     </form>
   );

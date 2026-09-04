@@ -17,6 +17,7 @@ export const users = pgTable("users", {
   email: text("email").notNull(),
   name: text("name").notNull(),
   password_hash: text("password_hash").notNull(),
+  is_admin: boolean("is_admin").notNull().default(false),
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()
     .defaultNow(),
@@ -59,6 +60,8 @@ export const venues = pgTable("venues", {
   bar_pin: text("bar_pin").notNull().default("1234"),
   plan: text("plan").notNull().default("free"),
   is_published: boolean("is_published").notNull().default(true),
+  // pending | active | rejected — pending venues are invisible until an admin approves
+  status: text("status").notNull().default("active"),
   passport_enabled: boolean("passport_enabled").notNull().default(false),
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()

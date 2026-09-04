@@ -59,7 +59,12 @@ export function toVenuePublic(v: Venue): VenuePublic {
 
 export async function getVenueBySlug(slug: string): Promise<Venue | null> {
   await ensureSeeded();
-  const rows = await db.select().from(venues).where(eq(venues.slug, slug)).limit(1);
+  // Only active venues are reachable publicly — pending/rejected ones 404 everywhere
+  const rows = await db
+    .select()
+    .from(venues)
+    .where(and(eq(venues.slug, slug), eq(venues.status, "active")))
+    .limit(1);
   return rows[0] ?? null;
 }
 
