@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { demoteAdminAction, promoteAdminAction } from "@/lib/actions";
+import {
+  adminDeleteAccountAction,
+  demoteAdminAction,
+  promoteAdminAction,
+} from "@/lib/actions";
 
 /** Email input → grants is_admin to an existing account. */
 export function PromoteForm() {
@@ -99,6 +103,61 @@ export function DemoteButton({
         className="btn btn-ghost !px-3 !py-1 text-[11px] font-bold text-red-300 hover:bg-red-500/10"
       >
         {busy ? "…" : "Demote"}
+      </button>
+      {error && <p className="mt-1 text-[10px] text-danger">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * Permanently delete an account that owns no venues (an orphan), freeing its
+ * email for a fresh signup. Disabled for yourself, the last admin, and any
+ * account that still owns venues.
+ */
+export function DeleteAccountButton({
+  userId,
+  email,
+  disabled,
+  disabledTitle,
+}: {
+  userId: string;
+  email: string;
+  disabled?: boolean;
+  disabledTitle?: string;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function del() {
+    if (
+      !window.confirm(
+        `Permanently delete the account ${email}?\n\nThis frees the email for a new signup. The account owns no venues, so no venue data is touched. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const res = await adminDeleteAccountAction(userId);
+    setBusy(false);
+    if (res?.error) {
+      setError(res.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <div className="flex shrink-0 flex-col items-end">
+      <button
+        type="button"
+        onClick={del}
+        disabled={disabled || busy}
+        title={disabled ? disabledTitle : undefined}
+        className="btn btn-ghost !px-3 !py-1 text-[11px] font-bold text-red-300 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {busy ? "…" : "Delete"}
       </button>
       {error && <p className="mt-1 text-[10px] text-danger">{error}</p>}
     </div>

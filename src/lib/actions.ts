@@ -658,20 +658,21 @@ export async function adminRestoreVenueAction(venueId: string): Promise<ActionRe
  * every child row (menu categories/items, tables, sessions, orders, line
  * items, waiter calls, views, wheel spins, passports) in one transaction.
  * Children are deleted explicitly so this works even if the database lacks
- * FK cascade constraints. The owner's account survives (they may own other
- * venues); only the venue and its data are gone.
+ * FK cascade constraints. If the owner is left with no venues at all, their
+ * account is deleted too (web sessions cascade) so the email frees up for a
+ * fresh signup. The last remaining admin is never deleted.
  */
 export async function adminDeleteVenueAction(venueId: string): Promise<ActionRes> {
   await requireAdmin();
   if (!venueId) return { error: "Missing venue id." };
   try {
     const rows = await db
-      .select({ slug: venues.slug })
+      .select({ slug: venues.slug, ownerId: venues.owner_id })
       .from(venues)
       .where(eq(venues.id, venueId))
       .limit(1);
     if (rows.length === 0) return { error: "Venue not found." };
-    const slug = rows[0].slug;
+    const { slug, ownerId } = rows[0];
     await db.transaction(async (tx) => {
       // Line items hang off orders, which hang off the venue.
       const venueOrderIds = await tx
@@ -698,6 +699,32 @@ export async function adminDeleteVenueAction(venueId: string): Promise<ActionRes
       await tx.delete(categories).where(eq(categories.venue_id, venueId));
       await tx.delete(tables).where(eq(tables.venue_id, venueId));
       await tx.delete(venues).where(eq(venues.id, venueId));
+      // Orphan owner (no venues left, not the last admin) → account goes too,
+      // so their email can be used for a brand-new signup.
+      const [{ n: remainingVenues }] = await tx
+        .select({ n: count() })
+        .from(venues)
+        .where(eq(venues.owner_id, ownerId));
+      if (Number(remainingVenues) === 0) {
+        const [owner] = await tx
+          .select({ isAdmin: users.is_admin })
+          .from(users)
+          .where(eq(users.id, ownerId))
+          .limit(1);
+        if (owner) {
+          let canDelete = true;
+          if (owner.isAdmin) {
+            const [{ n: admins }] = await tx
+              .select({ n: count() })
+              .from(users)
+              .where(eq(users.is_admin, true));
+            if (Number(admins) <= 1) canDelete = false;
+          }
+          if (canDelete) {
+            await tx.delete(users).where(eq(users.id, ownerId)); // sessions cascade
+          }
+        }
+      }
     });
     revalidateVenueEverywhere(slug);
   } catch (err) {
@@ -746,4 +773,52 @@ export async function demoteAdminAction(userId: string): Promise<ActionRes> {
   revalidatePath("/admin", "layout");
   revalidatePath("/dashboard", "layout");
   return { ok: true };
+}
+
+/**
+ * Permanently remove an account that owns no venues (e.g. one orphaned by a
+ * venue hard-delete), freeing its email for a fresh signup. Accounts that
+ * still own venues must be cleaned up via the venue's "Delete forever"
+ * first. You cannot delete yourself or the last remaining admin.
+ */
+export async function adminDeleteAccountAction(userId: string): Promise<ActionRes> {
+  const me = await requireAdmin();
+  if (!userId) return { error: "Missing user id." };
+  if (userId === me.id) {
+    return { error: "You can't delete your own account. Ask another admin." };
+  }
+  try {
+    return await db.transaction(async (tx) => {
+      const [target] = await tx
+        .select({ email: users.email, isAdmin: users.is_admin })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      if (!target) return { error: "Account not found." };
+      const [{ n: venuesOwned }] = await tx
+        .select({ n: count() })
+        .from(venues)
+        .where(eq(venues.owner_id, userId));
+      if (Number(venuesOwned) > 0) {
+        return {
+          error: `${target.email} still owns venues — delete those first (Venues → Delete forever).`,
+        };
+      }
+      if (target.isAdmin) {
+        const [{ n: admins }] = await tx
+          .select({ n: count() })
+          .from(users)
+          .where(eq(users.is_admin, true));
+        if (Number(admins) <= 1) {
+          return { error: "There must always be at least one admin." };
+        }
+      }
+      await tx.delete(users).where(eq(users.id, userId)); // sessions cascade
+      revalidatePath("/admin", "layout");
+      revalidatePath("/dashboard", "layout");
+      return { ok: true };
+    });
+  } catch (err) {
+    return { error: errText(err) };
+  }
 }

@@ -110,8 +110,10 @@ export default function VenueLifecycle({
         <p className="max-w-md text-xs text-fog">
           <span className="font-bold text-danger">Delete forever</span> — wipes
           this venue and every row tied to it: menu, tables, orders, guest
-          sessions, analytics. This cannot be undone, so use it only when you
-          want the venue gone for good.
+          sessions, analytics. If the owner has no other venues, their account
+          is deleted too — the email becomes free for a fresh signup. This
+          cannot be undone, so use it only when you want the venue gone for
+          good.
         </p>
         <button
           type="button"

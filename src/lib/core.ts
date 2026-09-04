@@ -181,6 +181,40 @@ export async function listAdminUsers(): Promise<OwnerLite[]> {
     .orderBy(asc(users.created_at));
 }
 
+export interface AccountRow {
+  id: string;
+  email: string;
+  name: string;
+  is_admin: boolean;
+  createdAt: Date;
+  venueCount: number;
+}
+
+/** Every account (all roles), oldest first, with how many venues they own. */
+export async function listAllAccounts(): Promise<AccountRow[]> {
+  const rows = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      is_admin: users.is_admin,
+      createdAt: users.created_at,
+      venueCount: count(venues.id),
+    })
+    .from(users)
+    .leftJoin(venues, eq(venues.owner_id, users.id))
+    .groupBy(users.id)
+    .orderBy(asc(users.created_at));
+  return rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    name: r.name,
+    is_admin: r.is_admin,
+    createdAt: r.createdAt,
+    venueCount: Number(r.venueCount),
+  }));
+}
+
 // ---------------------------------------------------------------- passport
 
 /** Passport guest ids are client-generated UUIDs kept in localStorage. */
