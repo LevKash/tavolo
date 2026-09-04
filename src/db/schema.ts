@@ -60,7 +60,9 @@ export const venues = pgTable("venues", {
   bar_pin: text("bar_pin").notNull().default("1234"),
   plan: text("plan").notNull().default("free"),
   is_published: boolean("is_published").notNull().default(true),
-  // pending | active | rejected — pending venues are invisible until an admin approves
+  // pending | active | rejected | archived — only active venues resolve publicly.
+  // pending = waiting for admin approval, rejected = declined application,
+  // archived = soft-deleted by a platform admin (rows/orders/sessions stay intact).
   status: text("status").notNull().default("active"),
   passport_enabled: boolean("passport_enabled").notNull().default(false),
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })

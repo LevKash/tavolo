@@ -3,6 +3,7 @@ import { asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { users, venues } from "@/db/schema";
 import { ApproveForm, DeclineForm } from "./review-buttons";
+import { StatusChip } from "./status-chip";
 
 export const dynamic = "force-dynamic";
 
@@ -13,22 +14,6 @@ function fmtDate(d: Date): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function StatusChip({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    active:
-      "border-green-400/30 bg-green-400/10 text-green-300",
-    rejected: "border-red-400/30 bg-red-400/10 text-red-300",
-    pending: "border-gold/30 bg-gold/10 text-gold-2",
-  };
-  return (
-    <span
-      className={`rounded border px-1.5 py-px text-[9px] font-bold uppercase tracking-widest ${styles[status] ?? styles.pending}`}
-    >
-      {status}
-    </span>
-  );
 }
 
 export default async function AdminPage() {
@@ -96,6 +81,12 @@ export default async function AdminPage() {
                   </p>
                   <p className="mt-0.5 text-[10px] text-fog-2">
                     submitted {fmtDate(v.created_at)}
+                    <Link
+                      href={`/admin/venues/${v.id}`}
+                      className="ml-2 text-gold-2 hover:text-gold-3"
+                    >
+                      details →
+                    </Link>
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-2">
@@ -109,9 +100,17 @@ export default async function AdminPage() {
       </section>
 
       <section className="mt-8 space-y-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-widest text-fog-2">
-          Recently reviewed
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-[10px] font-bold uppercase tracking-widest text-fog-2">
+            Recently reviewed
+          </h2>
+          <Link
+            href="/admin/venues"
+            className="text-[10px] font-bold uppercase tracking-widest text-gold-2 hover:text-gold-3"
+          >
+            All venues →
+          </Link>
+        </div>
         {decided.length === 0 && (
           <p className="text-xs text-fog-2">Nothing yet.</p>
         )}
@@ -132,15 +131,12 @@ export default async function AdminPage() {
                 <p className="text-[10px] text-fog-2">
                   {fmtDate(v.created_at)}
                   {v.slug ? ` · /m/${v.slug}` : ""}
-                  {v.slug && v.status === "active" && (
-                    <Link
-                      href={`/m/${v.slug}`}
-                      target="_blank"
-                      className="ml-1 text-gold-2 hover:text-gold-3"
-                    >
-                      view ↗
-                    </Link>
-                  )}
+                  <Link
+                    href={`/admin/venues/${v.id}`}
+                    className="ml-2 text-gold-2 hover:text-gold-3"
+                  >
+                    manage →
+                  </Link>
                 </p>
               </div>
               <StatusChip status={v.status} />

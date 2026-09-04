@@ -261,7 +261,9 @@ async function doSeed(): Promise<void> {
         email: "demo@ambrosia.gr",
         name: "Demo Owner",
         password_hash: await hashPassword("demo1234"),
-        is_admin: true, // demo account doubles as the operator's admin login
+        // Demo account doubles as the operator's platform-admin login (/admin).
+        // Further admins are promoted by email from /admin/admins.
+        is_admin: true,
       })
       .returning();
 

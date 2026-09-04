@@ -63,7 +63,7 @@ export default function DashNav(props: {
             )}
           >
             <span className="text-base">🛎</span>
-            Applications
+            Admin panel
           </Link>
         </div>
       )}

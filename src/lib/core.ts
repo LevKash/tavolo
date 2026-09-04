@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   categories,
@@ -9,6 +9,7 @@ import {
   orders,
   tableSessions,
   tables,
+  users,
   venues,
   waiterCalls,
   wheelSpins,
@@ -71,6 +72,113 @@ export async function getVenueBySlug(slug: string): Promise<Venue | null> {
 export async function getVenueById(id: string): Promise<Venue | null> {
   const rows = await db.select().from(venues).where(eq(venues.id, id)).limit(1);
   return rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------- platform admin
+
+/** Lifecycle of a venue. Only `active` venues resolve at /m, /bar, /staff. */
+export const VENUE_STATUSES = ["pending", "active", "rejected", "archived"] as const;
+export type VenueStatus = (typeof VENUE_STATUSES)[number];
+
+export function isVenueStatus(value: unknown): value is VenueStatus {
+  return (
+    typeof value === "string" &&
+    (VENUE_STATUSES as readonly string[]).includes(value)
+  );
+}
+
+/** Plans an admin may assign. */
+export const VENUE_PLANS = ["free", "pro"] as const;
+
+/** Compact owner projection — never leaks password hashes to pages. */
+export interface OwnerLite {
+  id: string;
+  email: string;
+  name: string;
+  is_admin: boolean;
+}
+
+export interface AdminVenueRow {
+  venue: Venue;
+  owner: OwnerLite | null;
+}
+
+const ownerLite = {
+  id: users.id,
+  email: users.email,
+  name: users.name,
+  is_admin: users.is_admin,
+};
+
+/**
+ * Every venue on the platform (all statuses), newest first, with its owner.
+ * `q` matches name / slug / owner email (case-insensitive substring).
+ */
+export async function listVenuesForAdmin(opts: {
+  q?: string;
+  status?: VenueStatus;
+} = {}): Promise<AdminVenueRow[]> {
+  const q = (opts.q ?? "").trim();
+  const filters = [];
+  if (opts.status) filters.push(eq(venues.status, opts.status));
+  if (q) {
+    const like = `%${q.replace(/[%_]/g, "\\$&")}%`;
+    filters.push(
+      or(
+        ilike(venues.name, like),
+        ilike(venues.slug, like),
+        ilike(users.email, like),
+      ),
+    );
+  }
+  const rows = await db
+    .select({ venue: venues, owner: ownerLite })
+    .from(venues)
+    .leftJoin(users, eq(venues.owner_id, users.id))
+    .where(filters.length > 0 ? and(...filters) : undefined)
+    .orderBy(desc(venues.created_at));
+  return rows.map((r) => ({ venue: r.venue, owner: r.owner ?? null }));
+}
+
+/** One venue + owner for the admin editor, regardless of status. */
+export async function getVenueForAdmin(
+  id: string,
+): Promise<AdminVenueRow | null> {
+  const rows = await db
+    .select({ venue: venues, owner: ownerLite })
+    .from(venues)
+    .leftJoin(users, eq(venues.owner_id, users.id))
+    .where(eq(venues.id, id))
+    .limit(1);
+  if (rows.length === 0) return null;
+  return { venue: rows[0].venue, owner: rows[0].owner ?? null };
+}
+
+/** Venue counts per status — drives the tab badges in /admin. */
+export async function countVenuesByStatus(): Promise<Record<VenueStatus, number>> {
+  const rows = await db
+    .select({ status: venues.status, n: count() })
+    .from(venues)
+    .groupBy(venues.status);
+  const out: Record<VenueStatus, number> = {
+    pending: 0,
+    active: 0,
+    rejected: 0,
+    archived: 0,
+  };
+  for (const r of rows) {
+    if (isVenueStatus(r.status)) out[r.status] = Number(r.n);
+  }
+  return out;
+}
+
+/** All platform admins (is_admin = true), oldest first. */
+export async function listAdminUsers(): Promise<OwnerLite[]> {
+  return db
+    .select(ownerLite)
+    .from(users)
+    .where(eq(users.is_admin, true))
+    .orderBy(asc(users.created_at));
 }
 
 // ---------------------------------------------------------------- passport

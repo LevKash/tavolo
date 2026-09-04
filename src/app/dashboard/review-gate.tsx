@@ -34,6 +34,24 @@ export default function ReviewGate({
               day. Until then your menu stays private.
             </p>
           </>
+        ) : status === "archived" ? (
+          <>
+            <h1 className="mt-6 text-lg font-bold text-cream">
+              Venue archived
+            </h1>
+            <p className="mt-2 text-sm text-fog">{venueName}</p>
+            <p className="mt-4 text-sm leading-relaxed text-fog">
+              This venue has been taken offline by the Ordavo team. Your menu,
+              tables and order history are kept safe. To bring it back, write to{" "}
+              <a
+                href="mailto:contact@levkashkin.eu"
+                className="text-gold-2 hover:text-gold-3"
+              >
+                contact@levkashkin.eu
+              </a>
+              .
+            </p>
+          </>
         ) : (
           <>
             <h1 className="mt-6 text-lg font-bold text-cream">
