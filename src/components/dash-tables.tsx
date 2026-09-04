@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   closeTableAction,
@@ -21,6 +21,15 @@ export default function DashTables(props: {
   const [editLabel, setEditLabel] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [fresh, setFresh] = useState<{ id: string; label: string } | null>(null);
+  const newInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!fresh) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFresh(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fresh]);
 
   async function run(fn: () => Promise<{ error?: string } | undefined>, id: string) {
     setBusy(id);
@@ -38,8 +47,18 @@ export default function DashTables(props: {
   async function addTable() {
     const label = newLabel.trim();
     if (!label) return;
-    const ok = await run(() => saveTableAction({ label }), "new");
-    if (ok) setNewLabel("");
+    setBusy("new");
+    setError("");
+    const res = await saveTableAction({ label });
+    setBusy(null);
+    if (res?.error) {
+      setError(res.error);
+      return;
+    }
+    setNewLabel("");
+    if (res.id) setFresh({ id: res.id, label });
+    router.refresh();
+    newInputRef.current?.focus();
   }
 
   const qrUrl = (tableId: string, fmt: string, size = 380) =>
@@ -165,6 +184,7 @@ export default function DashTables(props: {
           <p className="mb-2 text-xs font-bold uppercase tracking-widest text-fog-2">Add a table</p>
           <div className="flex gap-2">
             <input
+              ref={newInputRef}
               className="input"
               placeholder='e.g. "14" or "Garden"'
               value={newLabel}
@@ -180,6 +200,58 @@ export default function DashTables(props: {
           </p>
         </div>
       </div>
+
+      {/* fresh-table modal: QR ready to download */}
+      {fresh && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="card w-full max-w-sm p-6 text-center">
+            <p className="text-xs font-bold uppercase tracking-widest text-good">
+              ✓ Table ready
+            </p>
+            <h2 className="serif mt-1 text-2xl font-semibold text-cream">
+              {fresh.label}
+            </h2>
+            <p className="mt-1 text-xs text-fog">
+              Print this code and put it on the table — guests scan it to open
+              the menu.
+            </p>
+            <div className="mx-auto my-4 w-fit rounded-2xl bg-white p-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qrUrl(fresh.id, "png", 480)}
+                alt={`QR for ${fresh.label}`}
+                className="h-52 w-52"
+              />
+            </div>
+            <div className="flex gap-2">
+              <a
+                href={qrUrl(fresh.id, "png", 960)}
+                download={`qr-${props.slug}-${fresh.label
+                  .replace(/\s+/g, "-")
+                  .toLowerCase()}.png`}
+                className="btn btn-good flex-1"
+              >
+                Download PNG ⭳
+              </a>
+              <a
+                href={qrUrl(fresh.id, "svg")}
+                download={`qr-${props.slug}-${fresh.label
+                  .replace(/\s+/g, "-")
+                  .toLowerCase()}.svg`}
+                className="btn btn-ghost"
+              >
+                SVG
+              </a>
+            </div>
+            <button
+              className="btn btn-ghost mt-2 w-full"
+              onClick={() => setFresh(null)}
+            >
+              Done — add another
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -30,6 +30,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export interface ActionRes {
   error?: string;
   ok?: boolean;
+  id?: string;
 }
 
 function uniqueViolation(err: unknown) {
@@ -399,11 +400,17 @@ export async function saveTableAction(input: {
         .select({ m: max(tables.sort_order) })
         .from(tables)
         .where(eq(tables.venue_id, venue.id));
-      await db.insert(tables).values({
-        venue_id: venue.id,
-        label,
-        sort_order: (agg[0].m ?? 0) + 1,
-      });
+      const [inserted] = await db
+        .insert(tables)
+        .values({
+          venue_id: venue.id,
+          label,
+          sort_order: (agg[0].m ?? 0) + 1,
+        })
+        .returning({ id: tables.id });
+      revalidatePath("/dashboard/tables");
+      revalidatePath("/dashboard/qr");
+      return { ok: true, id: inserted?.id };
     }
   } catch (err) {
     return { error: errText(err) };
