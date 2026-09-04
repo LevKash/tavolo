@@ -38,7 +38,7 @@ export default function LandingPage() {
 
       <nav className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
         <Link href="/" className="serif text-2xl font-semibold tracking-wide text-cream">
-          Tavolo<span className="text-gold">.</span>
+          Ordavo<span className="text-gold">.</span>
         </Link>
         <div className="flex items-center gap-2 text-sm">
           <Link href="/login" className="btn btn-ghost">Log in</Link>
@@ -135,9 +135,9 @@ export default function LandingPage() {
 
       <footer className="relative z-10 border-t border-line px-6 py-10">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-xs text-fog-2 sm:flex-row">
-          <span className="serif text-lg text-fog">Tavolo<span className="text-gold">.</span></span>
+          <span className="serif text-lg text-fog">Ordavo<span className="text-gold">.</span></span>
           <span>White-label QR table ordering · PostgreSQL · Next.js</span>
-          <span>© {new Date().getFullYear()} Tavolo</span>
+          <span>© {new Date().getFullYear()} Ordavo</span>
         </div>
       </footer>
     </main>

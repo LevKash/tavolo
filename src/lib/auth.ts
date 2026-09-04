@@ -12,7 +12,7 @@ const scrypt = promisify(scryptCb) as (
   keylen: number,
 ) => Promise<Buffer>;
 
-export const SESSION_COOKIE = "tavolo_session";
+export const SESSION_COOKIE = "ordavo_session";
 export const SESSION_DAYS = 30;
 const KEYLEN = 64;
 

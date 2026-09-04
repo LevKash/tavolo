@@ -65,7 +65,7 @@ export default function SignupForm() {
       <div>
         <label className="label" htmlFor="slug">Menu URL</label>
         <div className="flex items-center gap-2 rounded-lg border border-line bg-white/[0.02] px-3 focus-within:border-gold/60">
-          <span className="text-sm text-fog-2">tavolo.app/m/</span>
+          <span className="text-sm text-fog-2">ordavo.app/m/</span>
           <input
             id="slug"
             className="w-full bg-transparent py-2.5 text-sm text-cream outline-none"

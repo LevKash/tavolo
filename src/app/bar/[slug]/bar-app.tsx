@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PinGate, apiPost, useBarPayload } from "@/components/bar-api";
 import { cn, money, playChime, timeAgo } from "@/lib/util";
 
-const STORE_KEY = "tavolo_bar_pin";
+const STORE_KEY = "ordavo_bar_pin";
 
 export default function BarApp(props: {
   slug: string;

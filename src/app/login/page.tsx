@@ -1,7 +1,7 @@
 import Link from "next/link";
 import LoginForm from "./login-form";
 
-export const metadata = { title: "Log in — Tavolo" };
+export const metadata = { title: "Log in — Ordavo" };
 
 export default function LoginPage() {
   return (
@@ -11,7 +11,7 @@ export default function LoginPage() {
       </div>
       <div className="relative w-full max-w-sm">
         <Link href="/" className="serif mb-8 block text-center text-3xl font-semibold text-cream">
-          Tavolo<span className="text-gold">.</span>
+          Ordavo<span className="text-gold">.</span>
         </Link>
         <div className="glass rounded-2xl p-7">
           <h1 className="serif text-2xl font-semibold text-cream">Welcome back</h1>

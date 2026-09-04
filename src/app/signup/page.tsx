@@ -1,7 +1,7 @@
 import Link from "next/link";
 import SignupForm from "./signup-form";
 
-export const metadata = { title: "Create your venue — Tavolo" };
+export const metadata = { title: "Create your venue — Ordavo" };
 
 export default function SignupPage() {
   return (
@@ -11,7 +11,7 @@ export default function SignupPage() {
       </div>
       <div className="relative w-full max-w-md">
         <Link href="/" className="serif mb-8 block text-center text-3xl font-semibold text-cream">
-          Tavolo<span className="text-gold">.</span>
+          Ordavo<span className="text-gold">.</span>
         </Link>
         <div className="glass rounded-2xl p-7">
           <h1 className="serif text-2xl font-semibold text-cream">Open your venue</h1>

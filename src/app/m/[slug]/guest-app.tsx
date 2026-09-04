@@ -58,7 +58,7 @@ const FIRST_ORDER_DISCOUNT = 0.9;
 const PASSPORT_EVERY = 10;
 const GUEST_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PASSPORT_KEY = (slug: string) => `tavolo:pp:${slug}`;
+const PASSPORT_KEY = (slug: string) => `ordavo:pp:${slug}`;
 
 export default function GuestApp({ menu, table }: GuestAppProps) {
   const venue = menu.venue;
@@ -87,7 +87,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   const [placedOnce, setPlacedOnce] = useState(false);
   // ── First-order deal: −10% within 5 min of opening the menu ──
   const [firstSeenMs] = useState<number>(() => {
-    const key = `tavolo:fs:${venue.slug}:${table?.id ?? ""}`;
+    const key = `ordavo:fs:${venue.slug}:${table?.id ?? ""}`;
     try {
       const prev = Number(sessionStorage.getItem(key));
       if (Number.isFinite(prev) && prev > 0) return prev;

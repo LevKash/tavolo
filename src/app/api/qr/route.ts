@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
         headers: {
           "Content-Type": "image/png",
           "Cache-Control": "public, max-age=3600",
-          "Content-Disposition": `inline; filename="tavolo-${venue.slug}${tableId ? `-${tableId.slice(0, 8)}` : ""}.png"`,
+          "Content-Disposition": `inline; filename="ordavo-${venue.slug}${tableId ? `-${tableId.slice(0, 8)}` : ""}.png"`,
         },
       });
     }
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       headers: {
         "Content-Type": "image/svg+xml",
         "Cache-Control": "public, max-age=3600",
-        "Content-Disposition": `inline; filename="tavolo-${venue.slug}${tableId ? `-${tableId.slice(0, 8)}` : ""}.svg"`,
+        "Content-Disposition": `inline; filename="ordavo-${venue.slug}${tableId ? `-${tableId.slice(0, 8)}` : ""}.svg"`,
       },
     });
   } catch (err) {

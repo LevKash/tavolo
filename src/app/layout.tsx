@@ -12,7 +12,7 @@ import "@fontsource/manrope/800.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Tavolo — QR table ordering for cocktail bars",
+  title: "Ordavo — QR table ordering for cocktail bars",
   description:
     "Guests scan the QR on their table and order drinks from their phone. Staff confirm, the bar pours, and you run everything from one dashboard.",
 };

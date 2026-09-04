@@ -5,7 +5,7 @@ import { PinGate, apiPost, useBarPayload } from "@/components/bar-api";
 import type { BarPayload } from "@/lib/types";
 import { cn, formatTableLabel, money, timeAgo } from "@/lib/util";
 
-const STORE_KEY = "tavolo_staff_pin";
+const STORE_KEY = "ordavo_staff_pin";
 
 export default function StaffApp(props: {
   slug: string;

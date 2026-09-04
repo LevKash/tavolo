@@ -26,7 +26,7 @@ export default async function DashboardLayout({
       <aside className="fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-line bg-ink-2/95 px-4 py-5">
         <div>
           <p className="serif text-2xl font-semibold text-cream">
-            Tavolo<span className="text-gold">.</span>
+            Ordavo<span className="text-gold">.</span>
           </p>
           <div className="mt-1 truncate text-xs text-fog">
             {venue ? venue.name : ""}

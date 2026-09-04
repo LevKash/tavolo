@@ -1,4 +1,4 @@
-# Tavolo — QR table ordering for cocktail bars & taverns
+# Ordavo — QR table ordering for cocktail bars & taverns
 
 A complete white-label SaaS product. Guests scan the QR code on their physical
 table, the menu opens instantly on their phone (no login, no app), orders land
