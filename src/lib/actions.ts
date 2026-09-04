@@ -6,11 +6,17 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
   categories,
+  cocktailPassports,
   menuItems,
+  menuViews,
+  orderLines,
+  orders,
   tableSessions,
   tables,
   users,
   venues,
+  waiterCalls,
+  wheelSpins,
   type Venue,
 } from "@/db/schema";
 import {
@@ -644,6 +650,59 @@ export async function adminRestoreVenueAction(venueId: string): Promise<ActionRe
     .returning({ slug: venues.slug });
   if (rows.length === 0) return { error: "Venue not found or not archived/rejected." };
   revalidateVenueEverywhere(rows[0].slug);
+  return { ok: true };
+}
+
+/**
+ * Hard delete — the only irreversible venue action. Wipes the venue row and
+ * every child row (menu categories/items, tables, sessions, orders, line
+ * items, waiter calls, views, wheel spins, passports) in one transaction.
+ * Children are deleted explicitly so this works even if the database lacks
+ * FK cascade constraints. The owner's account survives (they may own other
+ * venues); only the venue and its data are gone.
+ */
+export async function adminDeleteVenueAction(venueId: string): Promise<ActionRes> {
+  await requireAdmin();
+  if (!venueId) return { error: "Missing venue id." };
+  try {
+    const rows = await db
+      .select({ slug: venues.slug })
+      .from(venues)
+      .where(eq(venues.id, venueId))
+      .limit(1);
+    if (rows.length === 0) return { error: "Venue not found." };
+    const slug = rows[0].slug;
+    await db.transaction(async (tx) => {
+      // Line items hang off orders, which hang off the venue.
+      const venueOrderIds = await tx
+        .select({ id: orders.id })
+        .from(orders)
+        .where(eq(orders.venue_id, venueId));
+      if (venueOrderIds.length > 0) {
+        await tx
+          .delete(orderLines)
+          .where(
+            inArray(
+              orderLines.order_id,
+              venueOrderIds.map((r) => r.id),
+            ),
+          );
+      }
+      await tx.delete(orders).where(eq(orders.venue_id, venueId));
+      await tx.delete(tableSessions).where(eq(tableSessions.venue_id, venueId));
+      await tx.delete(waiterCalls).where(eq(waiterCalls.venue_id, venueId));
+      await tx.delete(menuViews).where(eq(menuViews.venue_id, venueId));
+      await tx.delete(wheelSpins).where(eq(wheelSpins.venue_id, venueId));
+      await tx.delete(cocktailPassports).where(eq(cocktailPassports.venue_id, venueId));
+      await tx.delete(menuItems).where(eq(menuItems.venue_id, venueId));
+      await tx.delete(categories).where(eq(categories.venue_id, venueId));
+      await tx.delete(tables).where(eq(tables.venue_id, venueId));
+      await tx.delete(venues).where(eq(venues.id, venueId));
+    });
+    revalidateVenueEverywhere(slug);
+  } catch (err) {
+    return { error: errText(err) };
+  }
   return { ok: true };
 }
 

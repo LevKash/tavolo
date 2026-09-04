@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { adminArchiveVenueAction, adminRestoreVenueAction } from "@/lib/actions";
+import { adminArchiveVenueAction, adminDeleteVenueAction, adminRestoreVenueAction } from "@/lib/actions";
 
 /**
- * Archive (soft delete) / restore controls. Archiving only flips the status:
- * the venue stops resolving publicly, all sessions & orders stay in the DB.
+ * Archive (soft delete) / restore / permanent delete controls. Archive only
+ * flips the status — the venue stops resolving publicly, all sessions &
+ * orders stay in the DB. Permanent delete wipes the venue and every child row.
  */
 export default function VenueLifecycle({
   venueId,
@@ -21,22 +22,30 @@ export default function VenueLifecycle({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(kind: "archive" | "restore") {
+  async function run(kind: "archive" | "restore" | "delete") {
     const ok = window.confirm(
       kind === "archive"
-        ? `Archive "${venueName}"?\n\nThe menu, bar and staff screens stop working immediately and the owner sees a locked dashboard. Orders and sessions are kept — you can restore it later.`
-        : `Restore "${venueName}"?\n\nThe venue becomes active again and its menu goes live at once.`,
+        ? `Archive "${venueName}"?\n\nOnly the owner sees a locked dashboard and the menu / bar / staff screens stop working. Orders and sessions are kept — you can restore it later.`
+        : kind === "restore"
+          ? `Restore "${venueName}"?\n\nThe venue becomes active again and its menu goes live at once.`
+          : `PERMANENTLY delete "${venueName}"?\n\nThis deletes the venue and ALL of its data — menu, tables, orders, guest sessions, waiter calls and analytics. The owner's account stays. There is NO undo.`,
     );
     if (!ok) return;
     setBusy(true);
     setError(null);
-    const res =
-      kind === "archive"
-        ? await adminArchiveVenueAction(venueId)
-        : await adminRestoreVenueAction(venueId);
+    let res: { error?: string; ok?: boolean } | undefined;
+    if (kind === "archive") res = await adminArchiveVenueAction(venueId);
+    else if (kind === "restore") res = await adminRestoreVenueAction(venueId);
+    else res = await adminDeleteVenueAction(venueId);
     setBusy(false);
     if (res?.error) {
       setError(res.error);
+      return;
+    }
+    if (kind === "delete") {
+      // The venue page no longer exists — bounce to the list.
+      router.push("/admin/venues");
+      router.refresh();
       return;
     }
     router.refresh();
@@ -96,6 +105,22 @@ export default function VenueLifecycle({
             </div>
           </>
         )}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-danger/20 pt-4">
+        <p className="max-w-md text-xs text-fog">
+          <span className="font-bold text-danger">Delete forever</span> — wipes
+          this venue and every row tied to it: menu, tables, orders, guest
+          sessions, analytics. This cannot be undone, so use it only when you
+          want the venue gone for good.
+        </p>
+        <button
+          type="button"
+          onClick={() => run("delete")}
+          disabled={busy}
+          className="btn btn-ghost !border-danger/50 !px-4 !py-1.5 text-xs font-bold text-danger hover:!bg-danger/10"
+        >
+          {busy ? "…" : "Delete permanently"}
+        </button>
       </div>
     </section>
   );
