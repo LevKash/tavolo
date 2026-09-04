@@ -1,0 +1,7 @@
+.neon
+.env.local
+.vercel
+.env*
+node_modules/
+.next/
+*.tsbuildinfo
