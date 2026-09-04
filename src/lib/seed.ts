@@ -261,9 +261,10 @@ async function doSeed(): Promise<void> {
         email: "demo@ambrosia.gr",
         name: "Demo Owner",
         password_hash: await hashPassword("demo1234"),
-        // Demo account doubles as the operator's platform-admin login (/admin).
-        // Further admins are promoted by email from /admin/admins.
-        is_admin: true,
+        // Regular venue owner — the demo account has NO platform-admin access.
+        // Platform admins are never seeded; they are granted by an existing
+        // admin from /admin/admins (Accounts tab).
+        is_admin: false,
       })
       .returning();
 

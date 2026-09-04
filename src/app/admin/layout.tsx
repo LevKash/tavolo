@@ -12,7 +12,9 @@ export default async function AdminLayout({
   children: React.ReactNode;
 }) {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  // Not signed in → the dedicated platform-admin entrance.
+  if (!user) redirect("/admin/login");
+  // Signed in but not a platform admin → never see the panel.
   if (!user.is_admin) redirect("/dashboard");
 
   const counts = await countVenuesByStatus();

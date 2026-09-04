@@ -47,6 +47,8 @@ plan, publish…), `tables`, `table_sessions` (open/closed), `categories` +
 |---|---|---|
 | `/` | everyone | marketing landing |
 | `/signup`, `/login` | owner | signup creates account + venue + tables 1–8 & Bar in one form |
+| `/admin/login` | platform admin | separate admin entrance (linked from `/login`); owner credentials are rejected without creating a session |
+| `/admin`, `/admin/venues`, `/admin/admins` | platform admin | applications queue, all venues, accounts (promote / demote / delete). Requires `users.is_admin`; the seeded demo owner is **not** an admin — admins are granted from the Accounts tab |
 | `/m/[slug]?table=…` | guests | instant bilingual menu, search, cart, live order status, call waiter, wheel of luck |
 | `/staff/[slug]` | staff | PIN-gated; confirm/decline first orders, waiter calls, open tables + manual open |
 | `/bar/[slug]` | bartender | PIN-gated; queue with chime, grey confirm section, waiter alert banner, open tables, “Today: N · €X” |

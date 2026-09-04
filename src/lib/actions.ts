@@ -84,7 +84,36 @@ export async function loginAction(input: {
   }
   const token = await createSessionToken(user.id);
   await setSessionCookie(token);
-  redirect("/dashboard");
+  // Platform admins land in the panel; venue owners always go to their dashboard.
+  redirect(user.is_admin ? "/admin" : "/dashboard");
+}
+
+/**
+ * Sign-in for the platform-admin entrance (/admin/login).
+ * Same credential check as `loginAction`, but a session is only created when
+ * the account actually has `is_admin` — a valid owner login is rejected with a
+ * clear message and stays logged out.
+ */
+export async function adminLoginAction(input: {
+  email: string;
+  password: string;
+}): Promise<ActionRes> {
+  await ensureSeeded();
+  const email = (input.email ?? "").trim().toLowerCase();
+  const password = input.password ?? "";
+  if (!email || !password) return { error: "Enter your email and password." };
+  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  const user = rows[0];
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
+    return { error: "Invalid email or password." };
+  }
+  if (!user.is_admin) {
+    // Valid credentials, wrong door: no session, no redirect.
+    return { error: "This account doesn't have admin access." };
+  }
+  const token = await createSessionToken(user.id);
+  await setSessionCookie(token);
+  redirect("/admin");
 }
 
 export async function signupAction(input: {
