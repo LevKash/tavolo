@@ -27,6 +27,8 @@ export interface VenuePublic {
   wifiPassword: string;
   published: boolean;
   passportEnabled: boolean;
+  /** True when the venue has pay-at-table configured (guest sees a Pay button). */
+  paymentsEnabled: boolean;
 }
 
 export interface ItemPublic {

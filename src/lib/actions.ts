@@ -34,6 +34,13 @@ import {
 } from "@/lib/core";
 import { ensureSeeded } from "@/lib/seed";
 import { notifyOperator } from "@/lib/tg";
+import {
+  credentialsComplete,
+  getAccessToken,
+  VivaError,
+  vivaConfigFromVenue,
+  type VivaEnv,
+} from "@/lib/viva";
 import { slugify } from "@/lib/util";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -42,6 +49,8 @@ export interface ActionRes {
   error?: string;
   ok?: boolean;
   id?: string;
+  /** Free-form confirmation line for the UI (e.g. "Connected — merchant AMBROSIA"). */
+  notice?: string;
 }
 
 function uniqueViolation(err: unknown) {
@@ -848,6 +857,88 @@ export async function adminDeleteAccountAction(userId: string): Promise<ActionRe
       return { ok: true };
     });
   } catch (err) {
+    return { error: errText(err) };
+  }
+}
+
+// ---------------------------------------------------------------- payments (Viva)
+
+/**
+ * Save the venue's own Viva Wallet merchant credentials.
+ *
+ * The secret is painted onto the row as-is for now — encrypting it at rest is the
+ * obvious next hardening step, but the secret never leaves the server (it is
+ * never put in VenuePublic), so a DB dump is the only way it can leak.
+ */
+export async function saveVivaSettingsAction(input: {
+  clientId: string;
+  clientSecret: string;
+  merchantId: string;
+  sourceCode: string;
+  env: string;
+  enabled: boolean;
+}): Promise<ActionRes> {
+  try {
+    const venue = await getOwnerVenue();
+    const clientId = (input.clientId ?? "").trim();
+    const clientSecret = (input.clientSecret ?? "").trim();
+    const merchantId = (input.merchantId ?? "").trim();
+    const sourceCode = (input.sourceCode ?? "").trim();
+    const env: VivaEnv = input.env === "live" ? "live" : "demo";
+
+    if (!/^\d{4}$/.test(sourceCode)) {
+      return { error: "Source code must be exactly 4 digits (e.g. 5521)." };
+    }
+    // Keep the stored secret when the field is left blank (the UI never echoes it).
+    const existing = await db
+      .select({ s: venues.viva_client_secret })
+      .from(venues)
+      .where(eq(venues.id, venue.id))
+      .limit(1);
+    const secret = clientSecret || existing[0]?.s || "";
+    if (!clientId || !secret || !merchantId) {
+      return { error: "Client ID, Client Secret and Merchant ID are all required." };
+    }
+
+    await db
+      .update(venues)
+      .set({
+        viva_client_id: clientId,
+        viva_client_secret: secret,
+        viva_merchant_id: merchantId,
+        viva_source_code: sourceCode,
+        viva_env: env,
+        payments_enabled: Boolean(input.enabled),
+      })
+      .where(eq(venues.id, venue.id));
+
+    revalidatePath("/dashboard/settings/payments");
+    revalidatePath("/dashboard", "layout");
+    return { ok: true, notice: "Saved. Run “Test connection” to confirm the keys work." };
+  } catch (err) {
+    return { error: errText(err) };
+  }
+}
+
+/** Ask Viva for an OAuth token with the stored credentials — the cheapest real check. */
+export async function testVivaConnectionAction(): Promise<ActionRes> {
+  try {
+    const venue = await getOwnerVenue();
+    const cfg = vivaConfigFromVenue(venue);
+    if (!credentialsComplete(cfg)) {
+      return { error: "Fill in Client ID, Client Secret, Merchant ID and Source Code first." };
+    }
+    const token = await getAccessToken(cfg);
+    if (!token) return { error: "Viva returned an empty token." };
+    return {
+      ok: true,
+      notice: `Connected to Viva (${cfg.env}) — merchant ${cfg.merchantId}.`,
+    };
+  } catch (err) {
+    const e = err as VivaError;
+    if (e instanceof VivaError) {
+      return { error: `Viva rejected the request (${e.status}): ${e.message}` };
+    }
     return { error: errText(err) };
   }
 }

@@ -55,6 +55,8 @@ export function toVenuePublic(v: Venue): VenuePublic {
     wifiPassword: v.wifi_password,
     published: v.is_published,
     passportEnabled: v.passport_enabled,
+    // Expose the flag only — never the credentials.
+    paymentsEnabled: Boolean(v.payments_enabled),
   };
 }
 

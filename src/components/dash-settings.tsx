@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { updateVenueAction } from "@/lib/actions";
 import type { VenuePublic } from "@/lib/types";
@@ -57,6 +58,19 @@ export default function DashSettings(props: { venue: SettingsData }) {
           {v.plan} plan
         </span>
       </div>
+
+      <Link
+        href="/dashboard/settings/payments"
+        className="flex items-center justify-between rounded-xl border border-line bg-white/[0.02] px-5 py-4 transition-colors hover:border-gold/40"
+      >
+        <div>
+          <p className="text-sm font-semibold text-cream">Payments</p>
+          <p className="mt-0.5 text-xs text-fog">
+            Let guests pay the table from their phone via your Viva Wallet.
+          </p>
+        </div>
+        <span className="text-fog-2">→</span>
+      </Link>
 
       {msg && (
         <p

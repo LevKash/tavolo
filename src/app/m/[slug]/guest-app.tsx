@@ -79,6 +79,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   const [tracked, setTracked] = useState<OrderView | null>(null);
   const [wheelOpen, setWheelOpen] = useState(false);
   const [callState, setCallState] = useState<"idle" | "sent">("idle");
+  const [paying, setPaying] = useState(false);
+  // Payment-result banner, shown when Viva redirects back to the menu.
+  const [payResult, setPayResult] = useState<"paid" | "failed" | "">("");
   const [toast, setToast] = useState("");
   const [errorBanner, setErrorBanner] = useState("");
   // ── Cocktail passport identity: per-venue guest UUID (localStorage). ──
@@ -490,6 +493,65 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     }
   }
 
+  /**
+   * Pay-at-table. The guest never sends an amount: the server recomputes the
+   * table's unpaid total from live orders and creates the Viva order for exactly
+   * that figure, then hands back the hosted checkout URL.
+   */
+  async function startPayment() {
+    if (!table || paying) return;
+    setPaying(true);
+    try {
+      const res = await fetch("/api/pay/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: venue.slug, tableId: table.id }),
+      });
+      const data = (await res.json()) as { checkoutUrl?: string; error?: string; message?: string };
+      if (!res.ok || !data.checkoutUrl) {
+        throw new Error(data.message ?? data.error ?? "Payment could not be started");
+      }
+      // Full navigation (not window.open) — Viva's checkout is the top-level flow
+      // and returns the guest to /m/<slug>?table=<id>&paid=1.
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      showToast((err as Error).message);
+      setPaying(false);
+    }
+  }
+
+  /**
+   * Read Viva's return parameters. `?paid=1` is only a UI hint — the real state
+   * is written by the webhook, so we confirm it against /api/pay/status rather
+   * than trusting the redirect.
+   */
+  useEffect(() => {
+    if (!table) return;
+    const qs = new URLSearchParams(window.location.search);
+    const hint = qs.get("paid") ?? qs.get("s");
+    if (!hint) return;
+    let cancelled = false;
+    fetch(`/api/pay/status?slug=${encodeURIComponent(venue.slug)}&tableId=${encodeURIComponent(table.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { paid?: boolean; status?: string } | null) => {
+        if (cancelled || !data) return;
+        setPayResult(data.paid ? "paid" : "failed");
+      })
+      .catch(() => {
+        /* status is best-effort; the webhook is the source of truth */
+      })
+      .finally(() => {
+        // Strip the params so a refresh doesn't replay the banner.
+        qs.delete("paid");
+        qs.delete("s");
+        const clean = `${window.location.pathname}${qs.toString() ? `?${qs}` : ""}`;
+        window.history.replaceState({}, "", clean);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [table, venue.slug]);
+
   if (tracked) {
     return (
       <OrderScreen
@@ -501,6 +563,8 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         callState={callState}
         venueName={venue.name}
         accent={acc}
+        onPay={table && venue.paymentsEnabled ? startPayment : undefined}
+        paying={paying}
       />
     );
   }
@@ -601,6 +665,25 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         {!table && (
           <p className="mt-4 rounded-xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold-2">
             Scan the QR code on your table to order from your seat.
+          </p>
+        )}
+        {payResult === "paid" && (
+          <div className="mt-3 rounded-xl border border-good/40 bg-good/10 px-4 py-3 text-sm">
+            <p className="font-bold text-good">
+              {lang === "el" ? "Η πληρωμή ολοκληρώθηκε ✓" : "Payment complete ✓"}
+            </p>
+            <p className="mt-1 text-fog">
+              {lang === "el"
+                ? "Ευχαριστούμε! Το τραπέζι σας είναι κλειστό."
+                : "Thank you! Your table is settled and closed."}
+            </p>
+          </div>
+        )}
+        {payResult === "failed" && (
+          <p className="mt-3 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2.5 text-sm text-gold-2">
+            {lang === "el"
+              ? "Η πληρωμή δεν ολοκληρώθηκε. Δοκιμάστε ξανά ή ζητήστε βοήθεια."
+              : "The payment didn't go through. Try again or ask the staff."}
           </p>
         )}
         {errorBanner && (
@@ -1317,8 +1400,11 @@ function OrderScreen(props: {
   onBack: () => void;
   onCall: () => void;
   callState: "idle" | "sent";
+  /** Set only when the venue has pay-at-table switched on. */
+  onPay?: () => void;
+  paying?: boolean;
 }) {
-  const { order, lang, tableLabel, venueName, accent, onBack, onCall, callState } = props;
+  const { order, lang, tableLabel, venueName, accent, onBack, onCall, callState, onPay, paying } = props;
   const [tick, setTick] = useState(Date.now());
   useEffect(() => {
     const iv = window.setInterval(() => setTick(Date.now()), 30000);
@@ -1452,6 +1538,28 @@ function OrderScreen(props: {
         )}
 
         <div className="mt-8 flex flex-col gap-2.5">
+          {onPay && !declined && (
+            <button
+              onClick={onPay}
+              disabled={paying}
+              className="btn btn-gold"
+            >
+              {paying
+                ? lang === "el"
+                  ? "Μετάβαση στην πληρωμή…"
+                  : "Opening payment…"
+                : lang === "el"
+                  ? `Πληρωμή ${money(order.total)}`
+                  : `Pay ${money(order.total)}`}
+            </button>
+          )}
+          {onPay && (
+            <p className="text-[11px] leading-relaxed text-fog-2">
+              {lang === "el"
+                ? "Πληρωμή με κάρτα ή Apple Pay απευθείας στο κατάστημα."
+                : "Card or Apple Pay, paid directly to the venue."}
+            </p>
+          )}
           {!terminal && (
             <button onClick={onCall} disabled={callState === "sent"} className={cn("btn", callState === "sent" ? "btn-good" : "btn-ghost")}>
               {callState === "sent" ? "✓ Waiter called" : "🛎️ Call waiter"}

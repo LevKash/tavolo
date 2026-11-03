@@ -65,6 +65,20 @@ export const venues = pgTable("venues", {
   // archived = soft-deleted by a platform admin (rows/orders/sessions stay intact).
   status: text("status").notNull().default("active"),
   passport_enabled: boolean("passport_enabled").notNull().default(false),
+  // --- payments (pay-at-table via the venue's own Viva Wallet merchant) ---
+  // Off by default: a venue must paste its own credentials before guests see a Pay button.
+  payments_enabled: boolean("payments_enabled").notNull().default(false),
+  // demo = Viva demo/sandbox endpoints, live = production.
+  viva_env: text("viva_env").notNull().default("demo"),
+  viva_client_id: text("viva_client_id").notNull().default(""),
+  // NEVER select this column into public/guest payloads.
+  viva_client_secret: text("viva_client_secret").notNull().default(""),
+  viva_merchant_id: text("viva_merchant_id").notNull().default(""),
+  // 4-digit payment source code created in the venue's Viva account.
+  viva_source_code: text("viva_source_code").notNull().default(""),
+  // Legacy API key (Basic auth). Only used to mint the webhook verification key.
+  // NEVER select this column into public/guest payloads.
+  viva_api_key: text("viva_api_key").notNull().default(""),
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()
     .defaultNow(),
@@ -96,6 +110,16 @@ export const tableSessions = pgTable(
       .notNull()
       .references(() => tables.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("open"), // open | closed
+    // Payment state of the whole table session.
+    // unpaid = nothing charged yet, pending = order created at Viva,
+    // paid = confirmed by webhook/API, failed = attempt rejected, refunded = money returned.
+    payment_status: text("payment_status").notNull().default("unpaid"),
+    // Viva order code (16-digit, stored as text to stay JS-safe) + transaction id.
+    payment_order_code: text("payment_order_code").notNull().default(""),
+    payment_transaction_id: text("payment_transaction_id").notNull().default(""),
+    // Amount actually charged, frozen at the moment the order was created.
+    payment_amount: numeric("payment_amount", { precision: 10, scale: 2, mode: "number" }),
+    paid_at: timestamp("paid_at", { withTimezone: true, mode: "date" }),
     opened_at: timestamp("opened_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
