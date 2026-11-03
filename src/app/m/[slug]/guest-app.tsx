@@ -704,7 +704,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
             )}
             <span className="min-w-0 truncate text-[11px] font-bold leading-tight text-cream">
               {table
-                ? (lang === "el" ? "Τραπέζι " : "Table ") + formatTableLabel(table.label)
+                ? lang === "el" && /^\d+$/.test(table.label)
+                  ? `Τραπέζι ${table.label}`
+                  : formatTableLabel(table.label)
                 : lang === "el"
                   ? "Προεπισκόπηση μενού"
                   : "Menu preview"}
@@ -1176,8 +1178,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                   {lang === "el" ? "Η παρέα σας" : "Your sitting"}
                 </p>
                 <h2 className="mt-1 font-display text-2xl text-cream">
-                  {(lang === "el" ? "Τραπέζι " : "Table ") +
-                    formatTableLabel(table.label)}
+                  {formatTableLabel(table.label)}
                 </h2>
                 <p className="mt-1 text-xs leading-relaxed text-fog">
                   {lang === "el"
