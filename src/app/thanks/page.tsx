@@ -69,7 +69,7 @@ export default async function Thanks({
         <div className="w-full rounded-2xl border border-white/10 bg-white/5 px-5 py-4">
           {label && (
             <div className="text-xs uppercase tracking-widest opacity-50">
-              {label}
+              Table {label}
             </div>
           )}
           {amount != null && !Number.isNaN(amount) && (
