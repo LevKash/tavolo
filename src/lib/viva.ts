@@ -26,6 +26,8 @@ export interface VivaCredentials {
   clientSecret: string;
   merchantId: string;
   sourceCode: string;
+  /** Required only for the legacy Basic-auth order lookup (`/api/orders/<code>`). */
+  apiKey?: string;
 }
 
 interface VivaEndpoints {
@@ -281,6 +283,47 @@ export async function fetchWebhookKey(creds: {
 /**
  * Fetches one transaction — used as the webhook fallback and for manual verify.
  */
+/**
+ * Reads the state of a payment ORDER (not a transaction). Needed when the guest
+ * returns from the hosted checkout without a usable transaction id: the order
+ * still reports whether it was paid, so a paid bill can settle instead of
+ * sitting unpaid forever.
+ *
+ * Viva order states: 0 = pending, 1 = expired, 2 = canceled, 3 = paid.
+ * Older deployments also use letter codes, so both are accepted.
+ */
+export async function retrieveOrderState(
+  creds: VivaCredentials,
+  orderCode: string,
+): Promise<{ paid: boolean; stateId: string; amount: number; transactionId: string }> {
+  const ep = endpointsFor(creds.env);
+  const auth = Buffer.from(`${creds.merchantId}:${creds.apiKey ?? ""}`).toString("base64");
+  const res = await fetch(`${ep.legacyApi}/api/orders/${encodeURIComponent(orderCode)}`, {
+    headers: { Authorization: `Basic ${auth}` },
+    cache: "no-store",
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new VivaError(`Viva retrieve order failed (${res.status})`, raw, res.status);
+  }
+  const json = JSON.parse(raw) as {
+    OrderCode?: number | string;
+    StateId?: number | string;
+    RequestAmount?: number;
+    Amount?: number;
+    Transactions?: { TransactionId?: string }[];
+  };
+  const stateId = String(json.StateId ?? "");
+  // 3 (or legacy 'F') means the order is fully paid.
+  const paid = stateId === "3" || stateId.toUpperCase() === "F";
+  return {
+    paid,
+    stateId,
+    amount: Number(json.RequestAmount ?? json.Amount ?? 0),
+    transactionId: String(json.Transactions?.[0]?.TransactionId ?? ""),
+  };
+}
+
 export async function retrieveTransaction(
   creds: VivaCredentials,
   transactionId: string,

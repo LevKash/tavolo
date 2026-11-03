@@ -3,7 +3,13 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions, venues } from "@/db/schema";
 import { settlePaidOrders } from "@/lib/core";
-import { credentialsComplete, retrieveTransaction, type VivaEnv } from "@/lib/viva";
+import {
+  credentialsComplete,
+  retrieveOrderState,
+  retrieveTransaction,
+  type VivaCredentials,
+  type VivaEnv,
+} from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +69,8 @@ export async function POST(req: NextRequest) {
     clientSecret: venue.viva_client_secret,
     merchantId: venue.viva_merchant_id,
     sourceCode: venue.viva_source_code,
-  };
+    apiKey: venue.viva_api_key ?? "",
+  } as VivaCredentials;
   if (!credentialsComplete(creds)) {
     return NextResponse.json({ ok: false, error: "no_credentials" }, { status: 400 });
   }
@@ -111,11 +118,61 @@ export async function POST(req: NextRequest) {
   // earlier payment resolves to an earlier order code and 409s the guest for
   // good.
   let txId = transactionId || session.payment_transaction_id || "";
+
   if (!txId) {
-    return NextResponse.json(
-      { ok: false, error: "no_transaction", hint: "transaction id required on first confirmation" },
-      { status: 409 },
+    // No transaction id yet — normal when the guest lands back from Viva and the
+    // return URL only carried the order code. Ask Viva about the ORDER instead of
+    // giving up: a paid order reports StateId 3 and settles the bill. Without this
+    // the guest pays, comes back, and the table still shows an unpaid bill.
+    const orderState = session.payment_order_code
+      ? await retrieveOrderState(creds, session.payment_order_code).catch(() => null)
+      : null;
+
+    if (!orderState) {
+      return NextResponse.json(
+        { ok: false, error: "no_transaction", hint: "transaction id required on first confirmation" },
+        { status: 409 },
+      );
+    }
+
+    if (!orderState.paid) {
+      return NextResponse.json({ ok: true, paid: false, statusId: orderState.stateId });
+    }
+
+    const now = new Date();
+    await db
+      .update(tableSessions)
+      .set({
+        payment_status: "paid",
+        payment_transaction_id: orderState.transactionId || "",
+        paid_at: now,
+      })
+      .where(eq(tableSessions.id, session.id));
+
+    const covered = await db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.session_id, session.id),
+          inArray(orders.status, ["pending_confirm", "new", "making", "served"]),
+        ),
+      );
+    const settledByOrder = await settlePaidOrders(
+      venue.id,
+      covered.map((o) => o.id),
     );
+
+    console.log(
+      `[pay/confirm] session=${session.id} order=${session.payment_order_code} paid=${orderState.amount}€ settled=${settledByOrder} via=order-state`,
+    );
+
+    return NextResponse.json({
+      ok: true,
+      paid: true,
+      amount: Number(session.payment_amount ?? orderState.amount ?? 0),
+      settled: settledByOrder,
+    });
   }
 
   let tx;
