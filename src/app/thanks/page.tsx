@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { db } from "@/db";
+import { tableSessions, tables, venues } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 /**
  * Post-payment confirmation page.
@@ -9,6 +12,13 @@ import Link from "next/link";
  * Deliberately no JS: the guest is on an unfamiliar device right after typing
  * card details, so this page must render even on a flaky connection, and the
  * link must work even if hydration never happens.
+ *
+ * The table id is re-resolved here rather than trusted from the query string.
+ * A payment source configured with a bare `venue` (or with literal
+ * `{TransactionId}` placeholders) still redirects here, and without this
+ * fallback the "back to my menu" button degraded to `/m/<slug>` — a menu with
+ * no table attached, where the guest cannot order or pay. `s_code` is the
+ * payment order code we created for that table, so it is the reliable key.
  */
 export const dynamic = "force-dynamic";
 
@@ -22,6 +32,39 @@ type Search = {
   s_code?: string;
 };
 
+async function resolveTable(sp: Search) {
+  if (sp.table) return { tableId: sp.table, label: sp.label ?? "", amount: sp.amount };
+
+  const code = sp.s_code ?? "";
+  if (!code) return null;
+
+  try {
+    const rows = await db
+      .select({
+        tableId: tableSessions.table_id,
+        label: tables.label,
+        amount: tableSessions.payment_amount,
+        slug: venues.slug,
+      })
+      .from(tableSessions)
+      .innerJoin(tables, eq(tables.id, tableSessions.table_id))
+      .innerJoin(venues, eq(venues.id, tables.venue_id))
+      .where(eq(tableSessions.payment_order_code, code))
+      .limit(1);
+
+    if (!rows.length) return null;
+    const r = rows[0];
+    return {
+      tableId: r.tableId,
+      label: r.label ?? "",
+      amount: r.amount != null ? String(r.amount) : undefined,
+      venue: r.slug,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default async function Thanks({
   searchParams,
 }: {
@@ -29,12 +72,17 @@ export default async function Thanks({
 }) {
   const sp = await searchParams;
   const failed = sp.status === "failed";
-  const amount = sp.amount ? Number(sp.amount) : null;
-  const label = sp.label ? String(sp.label) : "";
+  const resolved = await resolveTable(sp);
+
+  const tableId = resolved?.tableId ?? "";
+  const venue = resolved?.venue ?? sp.venue ?? "";
+  const amountRaw = resolved?.amount ?? sp.amount;
+  const amount = amountRaw ? Number(amountRaw) : null;
+  const label = resolved?.label || (sp.label ?? "");
 
   const back = new URLSearchParams();
-  if (sp.table) back.set("table", sp.table);
-  const backHref = `/m/${sp.venue ?? ""}${back.toString() ? `?${back}` : ""}`;
+  if (tableId) back.set("table", tableId);
+  const backHref = `/m/${venue}${back.toString() ? `?${back}` : ""}`;
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-6 px-6 py-10 text-center">
@@ -80,7 +128,7 @@ export default async function Thanks({
         </div>
       )}
 
-      {sp.venue ? (
+      {venue && tableId ? (
         <Link
           href={backHref}
           className="w-full rounded-2xl bg-[color:var(--color-gold)] px-6 py-4 text-base font-semibold text-black transition-opacity hover:opacity-90"
@@ -93,11 +141,16 @@ export default async function Thanks({
         </p>
       )}
 
-      {sp.venue && (
+      {venue && tableId && (
         <p className="text-xs opacity-40">
-          {failed
-            ? "Πίσω στο μενού"
-            : "Επιστροφή στο μενού"}
+          {failed ? "Πίσω στο μενού" : "Επιστροφή στο μενού"}
+        </p>
+      )}
+
+      {!tableId && (
+        <p className="max-w-xs text-xs opacity-40">
+          Couldn&apos;t find your table. Scan the QR code on your table to keep
+          ordering.
         </p>
       )}
     </main>
