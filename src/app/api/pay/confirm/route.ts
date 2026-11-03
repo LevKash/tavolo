@@ -105,8 +105,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, paid: true, amount: Number(session.payment_amount ?? 0), already: true });
   }
 
-  // Ask Viva. `transactionId` from the success URL is authoritative; otherwise we
-  // still need a transaction id to look up, which we learn from the payment order.
+  // Ask Viva. `transactionId` from the success URL is authoritative. The stored
+  // one is only a fallback for a webhook-driven confirm, and even then only when
+  // it still belongs to the CURRENT payment order — otherwise a stale id from an
+  // earlier payment resolves to an earlier order code and 409s the guest for
+  // good.
   let txId = transactionId || session.payment_transaction_id || "";
   if (!txId) {
     return NextResponse.json(

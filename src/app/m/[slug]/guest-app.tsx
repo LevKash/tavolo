@@ -631,12 +631,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         setPayResult(status.paid ? "paid" : "failed");
       })
       .finally(() => {
-        // Strip the params so a refresh doesn't replay the banner.
-        qs.delete("paid");
-        qs.delete("s");
-        qs.delete("t");
-        const clean = `${window.location.pathname}${qs.toString() ? `?${qs}` : ""}`;
-        window.history.replaceState({}, "", clean);
+        // Keep the params in the address bar. Stripping them used to make the
+        // "paid" banner vanish on refresh *and* hide the fact that a payment
+        // happened while the session was still stuck in `pending` — the guest
+        // saw a normal menu and assumed the app was broken. Keeping `paid`/`t`
+        // lets a reload re-run the confirmation instead.
       });
     return () => {
       cancelled = true;

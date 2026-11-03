@@ -205,10 +205,16 @@ export async function POST(req: NextRequest) {
     await db
       .update(tableSessions)
       .set({
+        // A NEW payment must not inherit the previous payment's transaction id:
+        // `pay/confirm` treats a stored id as a fallback when the guest returns
+        // without one, and an old id resolves to the OLD order code → 409
+        // `order_mismatch`, leaving the session stuck in `pending` forever.
+        // (Seen in production 2026-11-03: 2nd payment of €16 never settled.)
         payment_status: "pending",
         payment_order_code: created.orderCode,
         payment_amount: total,
         payment_created_at: new Date(),
+        payment_transaction_id: "",
       })
       .where(eq(tableSessions.id, session.id));
 

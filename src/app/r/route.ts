@@ -4,7 +4,7 @@ import { tableSessions, venues, tables } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
 /**
- * Static return URL for Viva Smart Checkout.
+ * Guest return URL for Viva Smart Checkout.
  *
  * Viva ignores `successUrl` / `failureUrl` sent in the Create Payment Order
  * body — the return address lives in the merchant's **payment source**
@@ -12,15 +12,15 @@ import { eq } from "drizzle-orm";
  *
  * Our real return URL is per-table and per-session (`/m/<slug>?table=<uuid>`),
  * which changes constantly and cannot be configured statically. So the payment
- * source points here, and we rebuild the per-guest URL from the one thing Viva
+ * source points here, and we resolve the guest's table from the one thing Viva
  * always gives back: `s` = the payment order code we created.
  *
- *   success → /r?venue=ambrosia&s=8885718966372608&t=<transactionId>
- *   failure → /r?venue=ambrosia&s=8885718966372608&fail=1
+ *   success → https://ordavo.vercel.app/r?venue=ambrosia&s={OrderCode}&t={TransactionId}
+ *   failure → https://ordavo.vercel.app/r?venue=ambrosia&s={OrderCode}&t={TransactionId}&fail=1
  *
- * `t` (transaction id) is forwarded so the guest app can reconcile against the
- * Viva API even when the webhook never arrived. The `t`/`s` params are kept on
- * the final URL for the same reason.
+ * The guest lands on a dedicated confirmation page (`/thanks`), not straight
+ * back into the menu: dropping them back into the menu left them on a screen
+ * that still showed the old bill and no obvious way to keep ordering.
  */
 export const dynamic = "force-dynamic";
 
@@ -46,6 +46,8 @@ export async function GET(req: Request) {
           sessionId: tableSessions.id,
           tableId: tableSessions.table_id,
           venueSlug: venues.slug,
+          tableLabel: tables.label,
+          amount: tableSessions.payment_amount,
         })
         .from(tableSessions)
         .innerJoin(tables, eq(tables.id, tableSessions.table_id))
@@ -55,15 +57,15 @@ export async function GET(req: Request) {
 
       if (rows.length) {
         const r = rows[0];
-        const target = new URL(
-          `${origin}/m/${r.venueSlug}`,
-          origin,
-        );
+        const target = new URL(`${origin}/thanks`, origin);
+        target.searchParams.set("venue", r.venueSlug);
         target.searchParams.set("table", r.tableId);
-        if (fail) target.searchParams.set("s", "failed");
-        else target.searchParams.set("paid", "1");
+        if (r.tableLabel) target.searchParams.set("label", r.tableLabel);
+        if (r.amount != null) target.searchParams.set("amount", String(r.amount));
+        if (fail) target.searchParams.set("status", "failed");
+        else target.searchParams.set("status", "paid");
         if (t) target.searchParams.set("t", t);
-        target.searchParams.set("s_code", s);
+        if (s) target.searchParams.set("s_code", s);
         return NextResponse.redirect(target, 303);
       }
 
@@ -79,9 +81,10 @@ export async function GET(req: Request) {
   }
 
   if (slug) {
-    const target = new URL(`${origin}/m/${slug}`, origin);
-    if (fail) target.searchParams.set("s", "failed");
-    else target.searchParams.set("paid", "1");
+    const target = new URL(`${origin}/thanks`, origin);
+    target.searchParams.set("venue", slug);
+    if (fail) target.searchParams.set("status", "failed");
+    else target.searchParams.set("status", "paid");
     if (t) target.searchParams.set("t", t);
     return NextResponse.redirect(target, 303);
   }
