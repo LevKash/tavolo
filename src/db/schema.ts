@@ -202,6 +202,12 @@ export const orders = pgTable(
     // phone) see everything they personally ordered, not just the table bill.
     // Nullable: older rows and orders placed by staff have no guest.
     guest_id: uuid("guest_id"),
+    // Payment state of THIS order. "paid" means its money is in the venue's
+    // Viva account and it must never be added to a bill again. Kept on the row
+    // (instead of just closing it) so the guest's history can show a receipt
+    // and the bill can subtract exactly what was settled.
+    payment_status: text("payment_status").notNull().default("unpaid"),
+    paid_amount: numeric("paid_amount", { precision: 10, scale: 2, mode: "number" }),
     total: numeric("total", { precision: 10, scale: 2, mode: "number" })
       .notNull()
       .default(0),

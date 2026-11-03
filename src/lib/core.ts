@@ -311,12 +311,17 @@ export async function isSessionTrusted(sessionId: string): Promise<boolean> {
 
 const OPEN_ORDER_STATUS = ["new", "making", "served"] as const;
 
+/**
+ * What is still owed on a sitting = every open order MINUS the ones already
+ * paid. A table can pay in rounds ("4 beers now, 4 beers later"), so the bill
+ * has to shrink as money lands instead of re-charging settled rounds.
+ */
 export async function runningSessionTotals(venueId: string, sessionIds: string[]) {
   if (sessionIds.length === 0) return new Map<string, number>();
   const rows = await db
     .select({
       session_id: orders.session_id,
-      total: sql<number>`coalesce(sum(${orders.total}), 0)`,
+      total: sql<number>`coalesce(sum(${orders.total}) filter (where ${orders.payment_status} <> 'paid'), 0)`,
     })
     .from(orders)
     .where(
@@ -351,6 +356,7 @@ export async function guestOrderHistory(
       total: orders.total,
       created_at: orders.created_at,
       session_id: orders.session_id,
+      payment_status: orders.payment_status,
     })
     .from(orders)
     .where(and(eq(orders.venue_id, venueId), eq(orders.guest_id, guestId)))
@@ -395,6 +401,7 @@ export async function guestOrderHistory(
       status: r.status,
       total: Number(r.total),
       createdAt: r.created_at.toISOString(),
+      paymentStatus: r.payment_status ?? "unpaid",
       lines: byOrder.get(r.id) ?? [],
     })),
     total: Math.round(visible.reduce((s, r) => s + Number(r.total), 0) * 100) / 100,
@@ -412,6 +419,28 @@ export type GuestOrderHistory = {
   }[];
   total: number;
 };
+
+/**
+ * Mark the orders covered by a successful payment as settled.
+ *
+ * This is the fix for "I paid €69.50 and the bill still says €116": the table
+ * bill used to sum EVERY order still attached to the open session, including
+ * ones already paid for. Now each paid order carries payment_status='paid'
+ * plus the amount actually settled, and the bill subtracts them.
+ *
+ * We deliberately keep session_id — the row must stay attached to the sitting
+ * so the guest's history and the venue's day report can reconstruct it.
+ */
+export async function settlePaidOrders(venueId: string, orderIds: string[]) {
+  if (orderIds.length === 0) return 0;
+  const now = new Date();
+  const rows = await db
+    .update(orders)
+    .set({ status: "closed", closed_at: now, payment_status: "paid" })
+    .where(and(eq(orders.venue_id, venueId), inArray(orders.id, orderIds)))
+    .returning({ id: orders.id, total: orders.total });
+  return rows.length;
+}
 
 /** Close a table (payment done at the cash desk). Ends the session. */
 export async function closeTableSession(venueId: string, tableId: string) {

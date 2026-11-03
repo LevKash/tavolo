@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { tableSessions, venues } from "@/db/schema";
-import { closeTableSession } from "@/lib/core";
+import { orders, tableSessions, venues } from "@/db/schema";
+import { closeTableSession, settlePaidOrders } from "@/lib/core";
 import {
   credentialsComplete,
   fetchWebhookKey,
@@ -175,6 +175,23 @@ export async function POST(req: NextRequest) {
       paid_at: new Date(),
     })
     .where(eq(tableSessions.id, session.id));
+
+  // Stamp every order this payment covered as settled. Without this the same
+  // drinks stay "open" and get billed again on the next round.
+  const covered = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(
+      and(
+        eq(orders.session_id, session.id),
+        inArray(orders.status, ["new", "making", "served", "pending_confirm"]),
+      ),
+    );
+  const settled = await settlePaidOrders(
+    session.venue_id,
+    covered.map((o) => o.id),
+  );
+  console.log(`[viva-webhook] settled ${settled} orders for session ${session.id}`);
 
   // Auto-close the table: the whole point of pay-at-table is that nobody has to
   // walk over with a terminal. Only close if it is still open.

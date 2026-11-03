@@ -55,6 +55,7 @@ type GuestOrderHistoryView = {
     status: string;
     total: number;
     createdAt: string;
+    paymentStatus?: string;
     lines: { name: string; qty: number; total: number }[];
   }[];
   total: number;
@@ -98,6 +99,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   // Live bill for the whole table — what the "Pay" button actually charges.
   // Mirrors GET /api/pay/status (server computes it from open orders).
   const [tableDue, setTableDue] = useState<number | null>(null);
+  // The table bar opens a sheet: that is where a guest pays the bill for the
+  // whole sitting and re-enters a payment they abandoned on Viva.
+  const [sessionOpen, setSessionOpen] = useState(false);
   const [errorBanner, setErrorBanner] = useState("");
   // ── Cocktail passport identity: per-venue guest UUID (localStorage). ──
   const [guestId, setGuestId] = useState("");
@@ -657,31 +661,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
 
       {/* header */}
       <header className="sticky top-0 z-30 border-b border-line/70 bg-ink/85 backdrop-blur-xl">
-        <div className="flex items-center justify-between px-4 py-2.5">
-          <div className="flex min-w-0 items-center gap-2">
-            {table && (
-              <span
-                className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-wide"
-                style={{
-                  borderColor: `color-mix(in srgb, ${acc} 55%, transparent)`,
-                  color: `color-mix(in srgb, ${acc} 80%, white)`,
-                  background: `color-mix(in srgb, ${acc} 12%, transparent)`,
-                }}
-              >
-                <span
-                  className="h-1.5 w-1.5 rounded-full"
-                  style={{ background: acc }}
-                />
-                {formatTableLabel(table.label)}
-              </span>
-            )}
-            {!table && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[11px] font-bold text-fog">
-                📱 Menu preview
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center justify-between gap-2 px-4 py-2.5">
+          {/* Language first (left) — the table bar moved right and became the
+              session entry point, because "which table am I" is the question a
+              guest asks after scanning, not a label they skim past. */}
+          <div className="flex shrink-0 items-center gap-1.5">
             <div className="flex overflow-hidden rounded-full border border-line">
               {(["en", "el"] as Lang[]).map((l) => (
                 <button
@@ -698,6 +682,47 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               ))}
             </div>
           </div>
+
+          <button
+            onClick={() => setSessionOpen(true)}
+            className="flex min-w-0 items-center gap-2 rounded-full border px-2.5 py-1 text-left transition-colors hover:bg-white/5"
+            style={{
+              borderColor: `color-mix(in srgb, ${acc} 55%, transparent)`,
+              background: `color-mix(in srgb, ${acc} 12%, transparent)`,
+            }}
+            aria-label={
+              lang === "el"
+                ? "Το τραπέζι μου και το λογαριασμό της παρέας"
+                : "My table and this sitting's bill"
+            }
+          >
+            {table && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: acc }}
+              />
+            )}
+            <span className="min-w-0 truncate text-[11px] font-bold leading-tight text-cream">
+              {table
+                ? (lang === "el" ? "Τραπέζι " : "Table ") + formatTableLabel(table.label)
+                : lang === "el"
+                  ? "Προεπισκόπηση μενού"
+                  : "Menu preview"}
+            </span>
+            {table && (
+              <span
+                className="shrink-0 text-[10px] font-extrabold uppercase tracking-wide"
+                style={{ color: acc }}
+              >
+                {tableDue && tableDue > 0
+                  ? `€${tableDue.toFixed(2)}`
+                  : lang === "el"
+                    ? "Λογαριασμός"
+                    : "Bill"}
+              </span>
+            )}
+            <span className="shrink-0 text-[10px] text-fog">▾</span>
+          </button>
         </div>
         {/* search + chips */}
         <div className="px-4 pb-3">
@@ -1137,6 +1162,120 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
             )
           }
         />
+      )}
+
+      {/* table session — the bill for the whole sitting, always reachable.
+          This is the fix for "I cancelled on Viva and had no way back to
+          paying": the entry point no longer depends on placing a new order. */}
+      {sessionOpen && table && (
+        <Sheet onClose={() => setSessionOpen(false)}>
+          <div className="space-y-4 p-5 pb-8">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-fog">
+                  {lang === "el" ? "Η παρέα σας" : "Your sitting"}
+                </p>
+                <h2 className="mt-1 font-display text-2xl text-cream">
+                  {(lang === "el" ? "Τραπέζι " : "Table ") +
+                    formatTableLabel(table.label)}
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-fog">
+                  {lang === "el"
+                    ? "Σαρώσατε το QR και είστε σε αυτό το τραπέζι. Πληρώστε εδώ όλο τον λογαριασμό της παρέας — ό,τι έχετε ήδη πληρώσει αφαιρείται."
+                    : "You scanned the QR, so this is your table. Pay the whole table's bill here — anything already paid is deducted."}
+                </p>
+              </div>
+              <button
+                onClick={() => setSessionOpen(false)}
+                className="shrink-0 rounded-full border border-line px-2.5 py-1 text-sm text-fog"
+                aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-line bg-ink-2/60 p-4">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs font-bold uppercase tracking-wide text-fog">
+                  {lang === "el" ? "Προς πληρωμή" : "Still to pay"}
+                </span>
+                <span className="font-display text-3xl font-extrabold text-cream">
+                  {tableDue === null
+                    ? "—"
+                    : `€${tableDue.toFixed(2)}`}
+                </span>
+              </div>
+              {tableDue !== null && tableDue <= 0 && (
+                <p className="mt-2 text-xs font-bold text-gold-2">
+                  {lang === "el"
+                    ? "Όλα πληρωμένα ✓ Ευχαριστούμε!"
+                    : "All settled ✓ Thank you!"}
+                </p>
+              )}
+            </div>
+
+            {history && history.orders.length > 0 && (
+              <div>
+                <p className="mb-2 text-[11px] font-extrabold uppercase tracking-[0.18em] text-fog">
+                  {lang === "el" ? "Οι παραγγελίες σας" : "Your orders"}
+                </p>
+                <ul className="divide-y divide-line/60 rounded-2xl border border-line bg-ink-2/40">
+                  {history.orders.map((o) => (
+                    <li key={o.id} className="px-3.5 py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-cream">
+                          {o.lines.map((i) => `${i.qty}× ${i.name}`).join(", ")}
+                        </span>
+                        <span className="shrink-0 text-xs font-extrabold text-gold-2">
+                          €{o.total.toFixed(2)}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[10px] uppercase tracking-wide text-fog">
+                        {o.createdAt.slice(11, 16)} ·{" "}
+                        {o.status === "paid"
+                          ? lang === "el"
+                            ? "πληρωμένο"
+                            : "paid"
+                          : lang === "el"
+                            ? o.status === "served"
+                              ? "σερβιρισμένο"
+                              : "σε εξέλιξη"
+                            : o.status === "served"
+                              ? "served"
+                              : "in progress"}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {venue.paymentsEnabled && tableDue !== null && tableDue > 0 && (
+              <button
+                onClick={() => {
+                  setSessionOpen(false);
+                  void startPayment();
+                }}
+                disabled={paying}
+                className="w-full rounded-2xl px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-ink disabled:opacity-60"
+                style={{ background: acc }}
+              >
+                {paying
+                  ? lang === "el"
+                    ? "Μετάβαση…"
+                    : "Redirecting…"
+                  : lang === "el"
+                    ? `Πληρωμή €${tableDue.toFixed(2)} με κάρτα`
+                    : `Pay €${tableDue.toFixed(2)} by card`}
+              </button>
+            )}
+            <p className="text-center text-[10px] leading-relaxed text-fog">
+              {lang === "el"
+                ? "Η πληρωμή γίνεται με ασφάλεια. Τα χρήματα πάνε απευθείας στο κατάστημα."
+                : "Secure card payment. The money goes straight to the venue."}
+            </p>
+          </div>
+        </Sheet>
       )}
 
       {/* toast */}
