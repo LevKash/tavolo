@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions, tables, venues } from "@/db/schema";
 import { getVenueBySlug } from "@/lib/core";
@@ -57,17 +57,24 @@ export async function POST(req: NextRequest) {
   }
   const session = sessions[0];
 
-  // Already paid — nothing to charge, just report it.
-  if (session.payment_status === "paid") {
-    return NextResponse.json({
-      ok: true,
-      alreadyPaid: true,
-      amount: Number(session.payment_amount ?? 0),
-    });
-  }
+  // NOTE: no per-session `alreadyPaid` shortcut. A table can have several open
+  // sessions, and one of them being settled must not block paying the rest —
+  // "nothing left to pay" is decided by the summed amount below.
 
   // Live sum of what the guest actually consumed. `pending_confirm` orders are
   // not yet accepted by the bar, so they are excluded from the payable amount.
+  const openSessions = await db
+    .select({ id: tableSessions.id })
+    .from(tableSessions)
+    .where(and(eq(tableSessions.table_id, tableId), eq(tableSessions.status, "open")));
+  if (openSessions.length === 0) {
+    return NextResponse.json({ error: "no_open_session" }, { status: 409 });
+  }
+
+  // Charge the whole TABLE, not one session row: duplicate/rolling sessions
+  // split a single sitting into several rows, and charging only one of them
+  // under-bills the guest. Orders already settled (payment_status = 'paid') are
+  // excluded, so a second round only pays for what is still open.
   const sums = await db
     .select({
       total: sql<number>`coalesce(sum(${orders.total}), 0)`,
@@ -76,8 +83,12 @@ export async function POST(req: NextRequest) {
     .from(orders)
     .where(
       and(
-        eq(orders.session_id, session.id),
+        inArray(
+          orders.session_id,
+          openSessions.map((s) => s.id),
+        ),
         inArray(orders.status, ["new", "making", "served"] as const),
+        ne(orders.payment_status, "paid"),
       ),
     );
 

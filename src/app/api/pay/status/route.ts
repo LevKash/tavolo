@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tableSessions, tables } from "@/db/schema";
 import { getVenueBySlug, runningSessionTotals } from "@/lib/core";
@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
     })
     .from(tableSessions)
     .where(and(eq(tableSessions.table_id, tableId), eq(tableSessions.status, "open")))
+    .orderBy(desc(tableSessions.opened_at))
     .limit(1);
 
   // No open session means the table was closed — most likely right after payment.
@@ -42,11 +43,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ open: false, status: "closed", paid: true });
   }
 
-  // The live bill is the server-side sum of the session's open orders — the same
-  // figure /api/pay/session will charge. payment_amount only records a settled
-  // charge, so it is empty until the webhook lands.
-  const totals = await runningSessionTotals(venue.id, [rows[0].id]);
-  const due = totals.get(rows[0].id) ?? 0;
+  // The bill belongs to the TABLE, not to one session row. Duplicate open
+  // sessions used to hide whole rounds of orders (the guest paid €69.50 and was
+  // still shown €116), so sum across every open session of this table.
+  const openSessions = await db
+    .select({ id: tableSessions.id })
+    .from(tableSessions)
+    .where(and(eq(tableSessions.table_id, tableId), eq(tableSessions.status, "open")));
+  const totals = await runningSessionTotals(
+    venue.id,
+    openSessions.map((s) => s.id),
+  );
+  const due =
+    Math.round(
+      [...totals.values()].reduce((sum, v) => sum + v, 0) * 100,
+    ) / 100;
 
   return NextResponse.json({
     open: true,
