@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions, tables, venues } from "@/db/schema";
 import { getVenueBySlug } from "@/lib/core";
-import { createPaymentOrder, credentialsComplete, type VivaEnv } from "@/lib/viva";
+import { createPaymentOrder, credentialsComplete, endpointsFor, type VivaEnv } from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +61,6 @@ export async function POST(req: NextRequest) {
   // NOTE: no per-session `alreadyPaid` shortcut. A table can have several open
   // sessions, and one of them being settled must not block paying the rest —
   // "nothing left to pay" is decided by the summed amount below.
-
   // Live sum of what the guest actually consumed. `pending_confirm` orders are
   // not yet accepted by the bar, so they are excluded from the payable amount.
   const openSessions = await db
@@ -118,13 +118,58 @@ export async function POST(req: NextRequest) {
   const tableLabel = tbl[0].label;
   const lang = body.lang === "el" ? "el-GR" : "en-GB";
 
+  // ── Duplicate-charge guard ────────────────────────────────────────────────
+  // Viva keys its payment order on `merchantTrns` and hands back the SAME
+  // orderCode for an identical value. Reusing one merchantTrns per session made
+  // a second tap on Pay hit the already-paid order — the guest was charged
+  // twice while Ordavo only ever recorded one transaction. Two rules fix that:
+  //   1. every payment gets a unique merchantTrns/orderCode (below);
+  //   2. a tap that arrives while a recent checkout is still open reuses that
+  //      checkout instead of creating a parallel one (double-click protection).
+  const PAYMENT_REUSE_MS = 5 * 60 * 1000;
+  const pendingSession = await db
+    .select()
+    .from(tableSessions)
+    .where(
+      and(
+        eq(tableSessions.table_id, tableId),
+        eq(tableSessions.status, "open"),
+        eq(tableSessions.payment_status, "pending"),
+      ),
+    )
+    .limit(1);
+  if (
+    pendingSession.length > 0 &&
+    pendingSession[0].payment_order_code &&
+    pendingSession[0].opened_at &&
+    Date.now() - new Date(pendingSession[0].opened_at).getTime() < PAYMENT_REUSE_MS
+  ) {
+    // Same amount as the still-open checkout → hand the guest back the same
+    // ref. No second order is created, so no second charge is possible.
+    if (Number(pendingSession[0].payment_amount ?? 0) === total) {
+      return NextResponse.json({
+        ok: true,
+        checkoutUrl: `${endpointsFor(creds.env).checkout}?ref=${encodeURIComponent(
+          pendingSession[0].payment_order_code,
+        )}`,
+        orderCode: pendingSession[0].payment_order_code,
+        amount: total,
+        items: count,
+        table: tableLabel,
+        reused: true,
+      });
+    }
+  }
+
   try {
     const created = await createPaymentOrder(creds, {
       amountCents,
       customerTrns: `${venue.name} · Table ${tableLabel} · ${count} item${count === 1 ? "" : "s"}`,
-      // Our own trace id: lets a human reconcile an Ordavo session with a Viva
-      // transaction in the merchant portal without sharing guest data.
-      merchantTrns: `ordavo:${session.id}`,
+      // UNIQUE per payment. Viva dedupes on this value: a repeated string
+      // returns the previous orderCode, which is how the same transaction got
+      // charged twice. The session id stays as a human-readable prefix so the
+      // merchant portal can still be reconciled with an Ordavo session.
+      merchantTrns: `ordavo:${session.id}:${randomUUID()}`,
       requestLang: lang,
       // Both URLs keep ?table= so the guest lands back on their own table
       // instead of the bare host — otherwise the table looks "reset".

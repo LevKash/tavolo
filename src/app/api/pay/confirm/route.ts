@@ -131,6 +131,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, paid: false, statusId: tx.statusId });
   }
 
+  // A paid transaction that belongs to a DIFFERENT payment order must not settle
+  // this session. Without this check a guest who paid twice (or a transaction
+  // reused from an earlier checkout) could zero out a bill it never covered.
+  if (
+    session.payment_order_code &&
+    tx.orderCode &&
+    String(tx.orderCode) !== String(session.payment_order_code)
+  ) {
+    console.warn(
+      `[pay/confirm] order mismatch session=${session.id} stored=${session.payment_order_code} tx=${tx.orderCode}`,
+    );
+    return NextResponse.json(
+      { ok: false, error: "order_mismatch", paid: false },
+      { status: 409 },
+    );
+  }
+
   const now = new Date();
   await db
     .update(tableSessions)
