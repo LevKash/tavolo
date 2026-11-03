@@ -116,6 +116,10 @@ export const tableSessions = pgTable(
     payment_status: text("payment_status").notNull().default("unpaid"),
     // Viva order code (16-digit, stored as text to stay JS-safe) + transaction id.
     payment_order_code: text("payment_order_code").notNull().default(""),
+    // Our own payment reference (`ordavo:<session>:<uuid>`). Unlike the order code,
+    // which Viva re-mints on every checkout, this is stable and appears on every
+    // transaction — it is the only reliable way to find a payment again.
+    payment_merchant_trns: text("payment_merchant_trns").notNull().default(""),
     payment_transaction_id: text("payment_transaction_id").notNull().default(""),
     // Amount actually charged, frozen at the moment the order was created.
     payment_amount: numeric("payment_amount", { precision: 10, scale: 2, mode: "number" }),

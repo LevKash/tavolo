@@ -292,6 +292,54 @@ export async function fetchWebhookKey(creds: {
  * Viva order states: 0 = pending, 1 = expired, 2 = canceled, 3 = paid.
  * Older deployments also use letter codes, so both are accepted.
  */
+/**
+ * Look up a successful payment by the reference WE chose (`merchantTrns`).
+ *
+ * This is the only reliable way to settle a bill: Viva mints a fresh `orderCode`
+ * every time the guest opens checkout, so the code stored on the session is
+ * frequently not the one that was paid. `merchantTrns` is written by us at
+ * payment-creation time and appears on every transaction, so it survives
+ * re-mints. The transactions endpoint only accepts a date range — pass the day
+ * the payment was started.
+ */
+export async function findPaidTransactionByMerchantTrns(
+  creds: VivaCredentials,
+  merchantTrns: string,
+  day: Date,
+): Promise<{ paid: boolean; transactionId: string; amount: number; statusId: string }> {
+  const ep = endpointsFor(creds.env);
+  const auth = Buffer.from(`${creds.merchantId}:${creds.apiKey ?? ""}`).toString("base64");
+  const iso = day.toISOString().slice(0, 10);
+  const url =
+    `${ep.legacyApi}/api/transactions/?dateFrom=${iso}-01&dateTo=${encodeURIComponent(iso)}-01` +
+    `&merchantTrns=${encodeURIComponent(merchantTrns)}`;
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, cache: "no-store" });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new VivaError(`Viva transactions lookup failed (${res.status})`, raw, res.status);
+  }
+  const json = JSON.parse(raw) as {
+    Transactions?: {
+      TransactionId?: string;
+      StatusId?: string;
+      Amount?: number;
+      MerchantTrns?: string;
+    }[];
+  };
+  // Viva ignores the merchantTrns filter, so narrow client-side. Status 'F' is a
+  // captured payment; anything else (pending, cancelled, refunded) does not
+  // settle a bill.
+  const match = (json.Transactions ?? []).find(
+    (t) => t.MerchantTrns === merchantTrns && String(t.StatusId ?? "").toUpperCase() === "F",
+  );
+  return {
+    paid: Boolean(match),
+    transactionId: String(match?.TransactionId ?? ""),
+    amount: Number(match?.Amount ?? 0),
+    statusId: String(match?.StatusId ?? ""),
+  };
+}
+
 export async function retrieveOrderState(
   creds: VivaCredentials,
   orderCode: string,

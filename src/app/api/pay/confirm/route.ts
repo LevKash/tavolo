@@ -5,6 +5,7 @@ import { orders, tableSessions, venues } from "@/db/schema";
 import { settlePaidOrders } from "@/lib/core";
 import {
   credentialsComplete,
+  findPaidTransactionByMerchantTrns,
   retrieveOrderState,
   retrieveTransaction,
   type VivaCredentials,
@@ -121,30 +122,44 @@ export async function POST(req: NextRequest) {
 
   if (!txId) {
     // No transaction id yet — normal when the guest lands back from Viva and the
-    // return URL only carried the order code. Ask Viva about the ORDER instead of
-    // giving up: a paid order reports StateId 3 and settles the bill. Without this
-    // the guest pays, comes back, and the table still shows an unpaid bill.
-    const orderState = session.payment_order_code
-      ? await retrieveOrderState(creds, session.payment_order_code).catch(() => null)
-      : null;
+    // return URL only carried the order code. Viva mints a NEW order code every
+    // time checkout opens, so the code on the session is often NOT the one that
+    // was paid, and the order JSON carries no transaction list. The only stable
+    // key is `merchantTrns`, which we generate ourselves and which every
+    // transaction echoes back. Look the payment up by that instead.
+    const mtrns = session.payment_merchant_trns;
+    let paidTx: Awaited<ReturnType<typeof findPaidTransactionByMerchantTrns>> | null = null;
 
-    if (!orderState) {
+    if (mtrns) {
+      paidTx = await findPaidTransactionByMerchantTrns(
+        creds,
+        mtrns,
+        session.payment_created_at ?? session.opened_at ?? new Date(),
+      ).catch(() => null);
+    }
+
+    if (!paidTx) {
+      const orderState = session.payment_order_code
+        ? await retrieveOrderState(creds, session.payment_order_code).catch(() => null)
+        : null;
       return NextResponse.json(
-        { ok: false, error: "no_transaction", hint: "transaction id required on first confirmation" },
-        { status: 409 },
+        {
+          ok: true,
+          paid: false,
+          statusId: orderState?.stateId ?? "",
+          hint: orderState ? undefined : "transaction id required on first confirmation",
+        },
+        { status: orderState ? 200 : 409 },
       );
     }
 
-    if (!orderState.paid) {
-      return NextResponse.json({ ok: true, paid: false, statusId: orderState.stateId });
-    }
-
+    // Money is confirmed. Settle the session and every order it covers.
     const now = new Date();
     await db
       .update(tableSessions)
       .set({
         payment_status: "paid",
-        payment_transaction_id: orderState.transactionId || "",
+        payment_transaction_id: paidTx.transactionId,
         paid_at: now,
       })
       .where(eq(tableSessions.id, session.id));
@@ -158,20 +173,20 @@ export async function POST(req: NextRequest) {
           inArray(orders.status, ["pending_confirm", "new", "making", "served"]),
         ),
       );
-    const settledByOrder = await settlePaidOrders(
+    const settled = await settlePaidOrders(
       venue.id,
       covered.map((o) => o.id),
     );
 
     console.log(
-      `[pay/confirm] session=${session.id} order=${session.payment_order_code} paid=${orderState.amount}€ settled=${settledByOrder} via=order-state`,
+      `[pay/confirm] session=${session.id} paid via=merchantTrns tx=${paidTx.transactionId} amount=${paidTx.amount} settled=${settled}`,
     );
 
     return NextResponse.json({
       ok: true,
       paid: true,
-      amount: Number(session.payment_amount ?? orderState.amount ?? 0),
-      settled: settledByOrder,
+      amount: paidTx.amount || Number(session.payment_amount ?? 0),
+      settled,
     });
   }
 

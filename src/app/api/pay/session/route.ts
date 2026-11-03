@@ -187,6 +187,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // One reference per payment attempt, kept on the session so `pay/confirm` can
+    // find this exact transaction later — Viva re-mints the order code on every
+    // redirect, so the code alone cannot identify the payment that settled.
+    const merchantTrns = `ordavo:${session.id}:${randomUUID()}`;
     const created = await createPaymentOrder(creds, {
       amountCents,
       customerTrns: `${venue.name} · Table ${tableLabel} · ${count} item${count === 1 ? "" : "s"}`,
@@ -194,7 +198,7 @@ export async function POST(req: NextRequest) {
       // returns the previous orderCode, which is how the same transaction got
       // charged twice. The session id stays as a human-readable prefix so the
       // merchant portal can still be reconciled with an Ordavo session.
-      merchantTrns: `ordavo:${session.id}:${randomUUID()}`,
+      merchantTrns,
       requestLang: lang,
       // Both URLs keep ?table= so the guest lands back on their own table
       // instead of the bare host — otherwise the table looks "reset".
@@ -212,6 +216,7 @@ export async function POST(req: NextRequest) {
         // (Seen in production 2026-11-03: 2nd payment of €16 never settled.)
         payment_status: "pending",
         payment_order_code: created.orderCode,
+        payment_merchant_trns: merchantTrns,
         payment_amount: total,
         payment_created_at: new Date(),
         payment_transaction_id: "",
