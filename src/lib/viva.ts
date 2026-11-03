@@ -310,10 +310,17 @@ export async function findPaidTransactionByMerchantTrns(
   const ep = endpointsFor(creds.env);
   const auth = Buffer.from(`${creds.merchantId}:${creds.apiKey ?? ""}`).toString("base64");
   const iso = day.toISOString().slice(0, 10);
+  // The endpoint wants whole days (YYYY-MM-DD). Search a small window around the
+  // payment date so a payment that started just before midnight still matches.
+  const from = new Date(day.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const to = new Date(day.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const url =
-    `${ep.legacyApi}/api/transactions/?dateFrom=${iso}-01&dateTo=${encodeURIComponent(iso)}-01` +
+    `${ep.legacyApi}/api/transactions/?dateFrom=${from}&dateTo=${to}` +
     `&merchantTrns=${encodeURIComponent(merchantTrns)}`;
-  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, cache: "no-store" });
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${auth}` },
+    cache: "no-store",
+  });
   const raw = await res.text();
   if (!res.ok) {
     throw new VivaError(`Viva transactions lookup failed (${res.status})`, raw, res.status);
