@@ -119,6 +119,10 @@ export const tableSessions = pgTable(
     payment_transaction_id: text("payment_transaction_id").notNull().default(""),
     // Amount actually charged, frozen at the moment the order was created.
     payment_amount: numeric("payment_amount", { precision: 10, scale: 2, mode: "number" }),
+    // When the checkout ref was minted. Distinct from `opened_at`: a session can
+    // be open for an hour but the guest only taps Pay now, and the reuse window
+    // for double-tap protection must measure from the tap, not from the sitting.
+    payment_created_at: timestamp("payment_created_at", { withTimezone: true, mode: "date" }),
     paid_at: timestamp("paid_at", { withTimezone: true, mode: "date" }),
     opened_at: timestamp("opened_at", { withTimezone: true, mode: "date" })
       .notNull()

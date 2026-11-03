@@ -127,38 +127,63 @@ export async function POST(req: NextRequest) {
   //   2. a tap that arrives while a recent checkout is still open reuses that
   //      checkout instead of creating a parallel one (double-click protection).
   const PAYMENT_REUSE_MS = 5 * 60 * 1000;
-  const pendingSession = await db
-    .select()
-    .from(tableSessions)
+  const reuseCheckout = async () => {
+    const pendingSession = await db
+      .select()
+      .from(tableSessions)
+      .where(
+        and(
+          eq(tableSessions.table_id, tableId),
+          eq(tableSessions.status, "open"),
+          eq(tableSessions.payment_status, "pending"),
+        ),
+      )
+      .limit(1);
+    if (pendingSession.length === 0) return null;
+    const p = pendingSession[0];
+    if (!p.payment_order_code) return null;
+    if (Number(p.payment_amount ?? 0) !== total) return null;
+    // A checkout that has been abandoned for longer than the reuse window is
+    // stale: let a fresh order be created instead of serving a dead ref.
+    const createdMs = new Date(p.payment_created_at ?? p.opened_at ?? 0).getTime();
+    if (!(Date.now() - createdMs < PAYMENT_REUSE_MS)) return null;
+    return {
+      ok: true,
+      checkoutUrl: `${endpointsFor(creds.env).checkout}?ref=${encodeURIComponent(p.payment_order_code)}`,
+      orderCode: p.payment_order_code,
+      amount: total,
+      items: count,
+      table: tableLabel,
+      reused: true,
+    };
+  };
+
+  const early = await reuseCheckout();
+  if (early) return NextResponse.json(early);
+
+  // Atomic claim on the session before talking to Viva. Two simultaneous taps
+  // both passed the read-only check above and each created its own payment
+  // order — a conditional UPDATE is the only way to make exactly one of them
+  // win, because Postgres serialises the row lock for us.
+  const claimToken = randomUUID();
+  const claimed = await db
+    .update(tableSessions)
+    .set({ payment_order_code: `claim:${claimToken}`, payment_amount: total })
     .where(
       and(
-        eq(tableSessions.table_id, tableId),
+        eq(tableSessions.id, session.id),
         eq(tableSessions.status, "open"),
-        eq(tableSessions.payment_status, "pending"),
+        sql`coalesce(${tableSessions.payment_order_code}, '') NOT LIKE 'claim:%'`,
       ),
     )
-    .limit(1);
-  if (
-    pendingSession.length > 0 &&
-    pendingSession[0].payment_order_code &&
-    pendingSession[0].opened_at &&
-    Date.now() - new Date(pendingSession[0].opened_at).getTime() < PAYMENT_REUSE_MS
-  ) {
-    // Same amount as the still-open checkout → hand the guest back the same
-    // ref. No second order is created, so no second charge is possible.
-    if (Number(pendingSession[0].payment_amount ?? 0) === total) {
-      return NextResponse.json({
-        ok: true,
-        checkoutUrl: `${endpointsFor(creds.env).checkout}?ref=${encodeURIComponent(
-          pendingSession[0].payment_order_code,
-        )}`,
-        orderCode: pendingSession[0].payment_order_code,
-        amount: total,
-        items: count,
-        table: tableLabel,
-        reused: true,
-      });
-    }
+    .returning({ id: tableSessions.id });
+  if (claimed.length === 0) {
+    // Another request is already creating the checkout. Give it a moment, then
+    // hand its ref back to this caller instead of opening a second one.
+    await new Promise((r) => setTimeout(r, 1200));
+    const loser = await reuseCheckout();
+    if (loser) return NextResponse.json(loser);
+    return NextResponse.json({ error: "payment_in_progress" }, { status: 409 });
   }
 
   try {
@@ -183,6 +208,7 @@ export async function POST(req: NextRequest) {
         payment_status: "pending",
         payment_order_code: created.orderCode,
         payment_amount: total,
+        payment_created_at: new Date(),
       })
       .where(eq(tableSessions.id, session.id));
 
@@ -197,6 +223,17 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const e = err as Error & { body?: string; status?: number };
     console.error("[pay/session] viva error:", e.message, e.body ?? "");
+    // Release the claim so the guest can retry. Leaving `claim:<uuid>` in the
+    // column would make every later tap look like a payment already in flight.
+    await db
+      .update(tableSessions)
+      .set({ payment_order_code: "", payment_amount: null })
+      .where(
+        and(
+          eq(tableSessions.id, session.id),
+          eq(tableSessions.payment_order_code, `claim:${claimToken}`),
+        ),
+      );
     return NextResponse.json(
       { error: "payment_provider_error", detail: e.message },
       { status: 502 },
