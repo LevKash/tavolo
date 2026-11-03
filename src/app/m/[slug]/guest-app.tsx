@@ -47,6 +47,18 @@ const PAIR_MAP: Record<string, string[]> = {
   "Assyrtiko Santorini": ["Meze Platter"],
   "Virgin Spritz": ["Olives & Rusks"],
 };
+
+/** Server truth for "what have I ordered on this phone" — see /api/guest/orders. */
+type GuestOrderHistoryView = {
+  orders: {
+    id: string;
+    status: string;
+    total: number;
+    createdAt: string;
+    lines: { name: string; qty: number; total: number }[];
+  }[];
+  total: number;
+};
 const PAIR_DISCOUNT = 0.9;
 /** First-order welcome deal window: −10% if the guest orders within 5 min
  *  of first opening the menu. Server enforces; client mirrors for the UI. */
@@ -89,6 +101,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   const [errorBanner, setErrorBanner] = useState("");
   // ── Cocktail passport identity: per-venue guest UUID (localStorage). ──
   const [guestId, setGuestId] = useState("");
+  // Everything this phone ordered at this venue, newest first. Reloaded after
+  // each order so the list is always the server's truth, never local guesswork.
+  const [history, setHistory] = useState<GuestOrderHistoryView | null>(null);
   const [passport, setPassport] = useState<PassportView | null>(null);
   const [placedOnce, setPlacedOnce] = useState(false);
   // ── First-order deal: −10% within 5 min of opening the menu ──
@@ -157,6 +172,31 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
       alive = false;
     };
   }, [venue.passportEnabled, venue.slug]);
+
+  /**
+   * Load this device's order history once the guest UUID is known, and again
+   * whenever a new order lands. This is the "scan the QR, get your session
+   * back" promise: the UUID survives in localStorage, so the same phone always
+   * finds its own orders without logging in.
+   */
+  const reloadHistory = useCallback(async () => {
+    if (!guestId) return;
+    try {
+      const res = await fetch(
+        `/api/guest/orders?slug=${encodeURIComponent(venue.slug)}&guest=${encodeURIComponent(guestId)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as GuestOrderHistoryView;
+      setHistory({ orders: data.orders ?? [], total: Number(data.total) || 0 });
+    } catch {
+      /* offline — the history panel simply stays as it was */
+    }
+  }, [guestId, venue.slug]);
+
+  useEffect(() => {
+    void reloadHistory();
+  }, [reloadHistory]);
   const fsBadge = `${String(Math.floor(fsLeft / 60_000)).padStart(2, "0")}:${String(
     Math.floor((fsLeft % 60_000) / 1000),
   ).padStart(2, "0")}`;
@@ -385,6 +425,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Order failed");
+      // The order is now on the server with this device's guest_id — pull the
+      // fresh history so "your orders" shows it immediately.
+      void reloadHistory();
       const minimal = data.order as {
         id: string;
         ref: string;
@@ -771,6 +814,14 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               {fsBadge}
             </span>
           </div>
+        )}
+        {history && history.orders.length > 0 && (
+          <GuestHistoryPanel
+            history={history}
+            lang={lang}
+            venueName={venue.name}
+            tableLabel={table ? formatTableLabel(table.label) : ""}
+          />
         )}
         {passport && passport.enabled && guestId && (
           <div className="mb-4 flex items-center gap-3 rounded-2xl border border-gold/25 bg-ink-2/70 px-4 py-3">
@@ -1741,6 +1792,128 @@ function WheelOverlay(props: {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Your orders at this table" — the thing a guest actually wants to see.
+ *
+ * Shown above the passport whenever this device has ordered before. Collapsed
+ * to a one-line summary so it never pushes the menu off-screen, expanded to
+ * full line-item receipts. Driven purely by /api/guest/orders (server truth
+ * keyed on the guest UUID in localStorage), so a rescan or a reload brings the
+ * same list back on the same phone.
+ */
+function GuestHistoryPanel({
+  history,
+  lang,
+  venueName,
+  tableLabel,
+}: {
+  history: GuestOrderHistoryView;
+  lang: "en" | "el";
+  venueName: string;
+  tableLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const el = lang === "el";
+  const count = history.orders.length;
+  return (
+    <div className="mb-4 overflow-hidden rounded-2xl border border-gold/25 bg-ink-2/70">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left"
+      >
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+          className="shrink-0 text-gold-2"
+        >
+          <path
+            d="M4 6h16M4 12h16M4 18h10"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-gold-2">
+            {el ? "Οι παραγγελίες σου" : "Your orders"}
+          </p>
+          <p className="truncate text-sm text-paper/80">
+            {el
+              ? `${count} ${count === 1 ? "παραγγελία" : "παραγγελίες"} · ${money(history.total)}`
+              : `${count} ${count === 1 ? "order" : "orders"} · ${money(history.total)}`}
+          </p>
+        </div>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+          className={`shrink-0 text-paper/50 transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          <path
+            d="M6 9l6 6 6-6"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {open && (
+        <div className="border-t border-gold/15">
+          <p className="px-4 pt-3 text-[10px] uppercase tracking-[0.12em] text-paper/40">
+            {venueName} · {tableLabel}
+          </p>
+          <ul className="px-4 pb-1 pt-2">
+            {history.orders.map((o) => (
+              <li key={o.id} className="border-b border-paper/10 py-3 last:border-b-0">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/50">
+                    #{o.id.slice(-4)} · {timeAgo(o.createdAt)}
+                  </span>
+                  <span className="text-sm font-semibold text-gold-2">
+                    {money(o.total)}
+                  </span>
+                </div>
+                <ul className="mt-1.5 space-y-0.5">
+                  {o.lines.map((l, i) => (
+                    <li
+                      key={`${o.id}-${i}`}
+                      className="flex items-baseline justify-between gap-2 text-sm text-paper/80"
+                    >
+                      <span className="truncate">
+                        {l.qty > 1 ? `${l.qty}× ` : ""}
+                        {l.name}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-paper/60">
+                        {money(l.total)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+          <div className="flex items-baseline justify-between border-t border-gold/20 px-4 py-3">
+            <span className="text-sm font-semibold text-paper/80">
+              {el ? "Σύνολο" : "Total"}
+            </span>
+            <span className="text-base font-bold text-gold-2">
+              {money(history.total)}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -330,6 +330,89 @@ export async function runningSessionTotals(venueId: string, sessionIds: string[]
   return new Map(rows.map((r) => [r.session_id, Number(r.total)]));
 }
 
+/**
+ * Everything one guest personally ordered at this venue, newest first, with
+ * line items. Powers "your orders" so a returning phone (same QR scan) sees
+ * its own history instead of an unexplained table total.
+ *
+ * Scoped by guest_id *and* venue_id — a guest UUID is only meaningful inside
+ * one venue, otherwise it would leak across bars.
+ */
+export async function guestOrderHistory(
+  venueId: string,
+  guestId: string,
+  limit = 30,
+): Promise<GuestOrderHistory> {
+  if (!isGuestId(guestId)) return { orders: [], total: 0 };
+  const rows = await db
+    .select({
+      id: orders.id,
+      status: orders.status,
+      total: orders.total,
+      created_at: orders.created_at,
+      session_id: orders.session_id,
+    })
+    .from(orders)
+    .where(and(eq(orders.venue_id, venueId), eq(orders.guest_id, guestId)))
+    .orderBy(desc(orders.created_at))
+    .limit(limit);
+  if (rows.length === 0) return { orders: [], total: 0 };
+
+  const lines = await db
+    .select({
+      order_id: orderLines.order_id,
+      name: orderLines.name_snapshot,
+      qty: orderLines.qty,
+      price: orderLines.price_snapshot,
+    })
+    .from(orderLines)
+    .where(
+      inArray(
+        orderLines.order_id,
+        rows.map((r) => r.id),
+      ),
+    );
+
+  const byOrder = new Map<string, GuestOrderLine[]>();
+  for (const l of lines) {
+    const list = byOrder.get(l.order_id) ?? [];
+    const qty = Number(l.qty);
+    list.push({
+      name: l.name,
+      qty,
+      total: Math.round(Number(l.price) * qty * 100) / 100,
+    });
+    byOrder.set(l.order_id, list);
+  }
+
+  // Guests only care about orders that actually count. Declined ones are
+  // hidden; everything else (including pending_confirm) is shown so the guest
+  // never wonders where their tap went.
+  const visible = rows.filter((r) => r.status !== "declined");
+  return {
+    orders: visible.map((r) => ({
+      id: r.id,
+      status: r.status,
+      total: Number(r.total),
+      createdAt: r.created_at.toISOString(),
+      lines: byOrder.get(r.id) ?? [],
+    })),
+    total: Math.round(visible.reduce((s, r) => s + Number(r.total), 0) * 100) / 100,
+  };
+}
+
+export type GuestOrderLine = { name: string; qty: number; total: number };
+export type GuestOrderHistory = {
+  orders: {
+    id: string;
+    status: string;
+    total: number;
+    createdAt: string;
+    lines: GuestOrderLine[];
+  }[];
+  total: number;
+};
+
 /** Close a table (payment done at the cash desk). Ends the session. */
 export async function closeTableSession(venueId: string, tableId: string) {
   const session = await getOpenSession(venueId, tableId);
@@ -968,6 +1051,9 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         status,
         source: input.source ?? "menu",
         note: input.note ?? "",
+        // Persist the device identity so a returning guest can see their own
+        // order history. `passportGuest` is already validated as a UUID.
+        guest_id: isGuestId(passportGuest) ? passportGuest : null,
         total,
       })
       .returning();

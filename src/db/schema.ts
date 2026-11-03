@@ -198,6 +198,10 @@ export const orders = pgTable(
     status: text("status").notNull().default("pending_confirm"),
     source: text("source").notNull().default("menu"), // menu | wheel
     note: text("note").notNull().default(""),
+    // Which device placed this order. Lets a returning guest (same QR, same
+    // phone) see everything they personally ordered, not just the table bill.
+    // Nullable: older rows and orders placed by staff have no guest.
+    guest_id: uuid("guest_id"),
     total: numeric("total", { precision: 10, scale: 2, mode: "number" })
       .notNull()
       .default(0),
