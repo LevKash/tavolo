@@ -33,7 +33,25 @@ type Search = {
 };
 
 async function resolveTable(sp: Search) {
-  if (sp.table) return { tableId: sp.table, label: sp.label ?? "", amount: sp.amount };
+  if (sp.table) {
+    // `/r` passes `label`, but a hand-written or third-party return URL may only
+    // carry the table id. Without a label the page degrades to a bare amount and
+    // the guest cannot tell which table was paid, so look the number up.
+    let label = sp.label ?? "";
+    if (!label) {
+      try {
+        const rows = await db
+          .select({ label: tables.label })
+          .from(tables)
+          .where(eq(tables.id, sp.table))
+          .limit(1);
+        label = rows[0]?.label ?? "";
+      } catch {
+        label = "";
+      }
+    }
+    return { tableId: sp.table, label, amount: sp.amount };
+  }
 
   // Viva does NOT echo our order code back on redirect: it mints a fresh
   // `orderCode` for the checkout, so `s` almost never matches
