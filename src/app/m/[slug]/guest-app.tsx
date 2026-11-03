@@ -135,8 +135,13 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
 
   // Passport guest identity: a per-venue UUID in localStorage (server
   // ignores non-UUID values), then fetch the current stamp snapshot.
+  /**
+   * Device identity — the whole point of "scan the QR, come back to your
+   * session". This runs for EVERY venue, not just ones with the cocktail
+   * passport: the UUID is what links orders to this phone, so gating it behind
+   * a loyalty feature silently broke order history everywhere else.
+   */
   useEffect(() => {
-    if (!venue.passportEnabled) return;
     let alive = true;
     const key = PASSPORT_KEY(venue.slug);
     let id = "";
