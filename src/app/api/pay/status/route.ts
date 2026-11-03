@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { tableSessions, tables } from "@/db/schema";
+import { orderLines, orders, tableSessions, tables } from "@/db/schema";
 import { getVenueBySlug, runningSessionTotals } from "@/lib/core";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +59,42 @@ export async function GET(req: NextRequest) {
       [...totals.values()].reduce((sum, v) => sum + v, 0) * 100,
     ) / 100;
 
+  // Itemised bill for the guest sheet. Without this the sheet shows a bare
+  // "STILL TO PAY €14.00" and the guest has to take the number on faith — which
+  // is exactly the "€96 out of nowhere" complaint. Guest history is keyed by
+  // the phone's guest_id, so a new phone / cleared storage saw no lines at all;
+  // this list comes from the table, so it is identical for every phone.
+  const unpaid = await db
+    .select({
+      name: orderLines.name_snapshot,
+      price: orderLines.price_snapshot,
+      qty: orderLines.qty,
+    })
+    .from(orderLines)
+    .innerJoin(orders, eq(orderLines.order_id, orders.id))
+    .where(
+      and(
+        inArray(
+          orders.session_id,
+          openSessions.map((s) => s.id),
+        ),
+        inArray(orders.status, ["pending_confirm", "new", "making", "served"] as const),
+        ne(orders.payment_status, "paid"),
+      ),
+    )
+    .orderBy(asc(orders.created_at), asc(orderLines.id));
+
+  // Collapse identical rows (two rounds of the same beer read as one line with
+  // qty 2 instead of two near-identical lines).
+  const merged = new Map<string, { name: string; price: number; qty: number }>();
+  for (const l of unpaid) {
+    const key = `${l.name}|${l.price}`;
+    const cur = merged.get(key);
+    if (cur) cur.qty += l.qty;
+    else merged.set(key, { name: l.name, price: Number(l.price), qty: l.qty });
+  }
+  const billLines = [...merged.values()];
+
   return NextResponse.json({
     open: true,
     status: rows[0].status,
@@ -66,5 +102,6 @@ export async function GET(req: NextRequest) {
     amount: due,
     amountPaid: Number(rows[0].amount ?? 0),
     paidAt: rows[0].paid_at ? rows[0].paid_at.toISOString() : null,
+    lines: billLines,
   });
 }

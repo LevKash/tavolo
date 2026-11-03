@@ -99,6 +99,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   // Live bill for the whole table — what the "Pay" button actually charges.
   // Mirrors GET /api/pay/status (server computes it from open orders).
   const [tableDue, setTableDue] = useState<number | null>(null);
+  // Itemised bill from the server. The sheet used to show a bare total with no
+  // breakdown, which is why a guest could not tell what the €14 was for.
+  const [billLines, setBillLines] = useState<
+    { name: string; price: number; qty: number }[]
+  >([]);
   // The table bar opens a sheet: that is where a guest pays the bill for the
   // whole sitting and re-enters a payment they abandoned on Viva.
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -655,9 +660,10 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         `/api/pay/status?slug=${encodeURIComponent(venue.slug)}&tableId=${encodeURIComponent(table.id)}`,
       )
         .then((r) => (r.ok ? r.json() : null))
-        .then((data: { open?: boolean; amount?: number } | null) => {
+        .then((data: { open?: boolean; amount?: number; lines?: { name: string; price: number; qty: number }[] } | null) => {
           if (cancelled || !data) return;
           if (data.open && typeof data.amount === "number") setTableDue(data.amount);
+          if (Array.isArray(data.lines)) setBillLines(data.lines);
         })
         .catch(() => {});
     };
@@ -1247,6 +1253,30 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                     ? "Όλα πληρωμένα ✓ Ευχαριστούμε!"
                     : "All settled ✓ Thank you!"}
                 </p>
+              )}
+              {/* Itemised breakdown from the server. Comes from the TABLE, not
+                  from this phone's guest history, so every phone sees the same
+                  lines — a guest who scanned on a fresh phone still knows what
+                  the total is made of. */}
+              {billLines.length > 0 && tableDue !== null && tableDue > 0 && (
+                <ul className="mt-3 space-y-1.5 border-t border-line/60 pt-3">
+                  {billLines.map((l) => (
+                    <li
+                      key={`${l.name}-${l.price}`}
+                      className="flex items-baseline justify-between gap-3 text-xs"
+                    >
+                      <span className="text-fog">
+                        <span className="font-extrabold text-cream">
+                          {l.qty}×
+                        </span>{" "}
+                        {l.name}
+                      </span>
+                      <span className="shrink-0 font-bold text-cream">
+                        €{(l.price * l.qty).toFixed(2)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
