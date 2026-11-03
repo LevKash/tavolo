@@ -27,6 +27,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "slug and tableId are required" }, { status: 400 });
   }
 
+  // Public origin for Viva's return URLs. Prefer the forwarded host so the same
+  // code works on Vercel, on a custom domain and on localhost.
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
+  const proto = req.headers.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  const origin = host ? `${proto}://${host}` : new URL(req.url).origin;
+
   const venue = await getVenueBySlug(slug);
   if (!venue) return NextResponse.json({ error: "Venue not found" }, { status: 404 });
   if (!venue.is_published) {
@@ -82,6 +88,16 @@ export async function POST(req: NextRequest) {
   }
 
   const amountCents = Math.round(total * 100);
+  const cash = Math.round(Number(session.total ?? 0) * 100);
+  if (amountCents < cash) {
+    console.warn(
+      `[pay/session] underpay blocked: session ${session.id} cash ${cash}c vs payable ${amountCents}c`,
+    );
+    return NextResponse.json(
+      { error: "amount_inconsistent", detail: "session.total exceeds payable orders" },
+      { status: 409 },
+    );
+  }
 
   const creds = {
     env: (venue.viva_env === "live" ? "live" : "demo") as VivaEnv,
@@ -105,6 +121,10 @@ export async function POST(req: NextRequest) {
       // transaction in the merchant portal without sharing guest data.
       merchantTrns: `ordavo:${session.id}`,
       requestLang: lang,
+      // Both URLs keep ?table= so the guest lands back on their own table
+      // instead of the bare host — otherwise the table looks "reset".
+      successUrl: `${origin}/m/${venue.slug}?table=${tbl[0].id}&paid=1`,
+      failureUrl: `${origin}/m/${venue.slug}?table=${tbl[0].id}&s=failed`,
     });
 
     await db

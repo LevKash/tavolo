@@ -83,6 +83,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   // Payment-result banner, shown when Viva redirects back to the menu.
   const [payResult, setPayResult] = useState<"paid" | "failed" | "">("");
   const [toast, setToast] = useState("");
+  // Live bill for the whole table — what the "Pay" button actually charges.
+  // Mirrors GET /api/pay/status (server computes it from open orders).
+  const [tableDue, setTableDue] = useState<number | null>(null);
   const [errorBanner, setErrorBanner] = useState("");
   // ── Cocktail passport identity: per-venue guest UUID (localStorage). ──
   const [guestId, setGuestId] = useState("");
@@ -552,6 +555,33 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     };
   }, [table, venue.slug]);
 
+  /**
+   * Keep the table bill fresh while the order screen is open. The Pay button
+   * charges the whole table (server-side), so it must never show the total of
+   * just the most recent order — that mismatch was the "18 vs 20 €" bug.
+   */
+  useEffect(() => {
+    if (!table || !venue.paymentsEnabled) return;
+    let cancelled = false;
+    const load = () => {
+      fetch(
+        `/api/pay/status?slug=${encodeURIComponent(venue.slug)}&tableId=${encodeURIComponent(table.id)}`,
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { open?: boolean; amount?: number } | null) => {
+          if (cancelled || !data) return;
+          if (data.open && typeof data.amount === "number") setTableDue(data.amount);
+        })
+        .catch(() => {});
+    };
+    load();
+    const iv = window.setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+    };
+  }, [table, venue.slug, venue.paymentsEnabled]);
+
   if (tracked) {
     return (
       <OrderScreen
@@ -565,6 +595,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         accent={acc}
         onPay={table && venue.paymentsEnabled ? startPayment : undefined}
         paying={paying}
+        payAmount={tableDue ?? undefined}
       />
     );
   }
@@ -1403,8 +1434,11 @@ function OrderScreen(props: {
   /** Set only when the venue has pay-at-table switched on. */
   onPay?: () => void;
   paying?: boolean;
+  /** Live sum of the whole table session. The "Pay" button charges the table,
+   *  not this one order, so it must show that number — not order.total. */
+  payAmount?: number;
 }) {
-  const { order, lang, tableLabel, venueName, accent, onBack, onCall, callState, onPay, paying } = props;
+  const { order, lang, tableLabel, venueName, accent, onBack, onCall, callState, onPay, paying, payAmount } = props;
   const [tick, setTick] = useState(Date.now());
   useEffect(() => {
     const iv = window.setInterval(() => setTick(Date.now()), 30000);
@@ -1549,15 +1583,19 @@ function OrderScreen(props: {
                   ? "Μετάβαση στην πληρωμή…"
                   : "Opening payment…"
                 : lang === "el"
-                  ? `Πληρωμή ${money(order.total)}`
-                  : `Pay ${money(order.total)}`}
+                  ? `Πληρωμή ${money(payAmount ?? order.total)}`
+                  : `Pay ${money(payAmount ?? order.total)}`}
             </button>
           )}
           {onPay && (
             <p className="text-[11px] leading-relaxed text-fog-2">
-              {lang === "el"
-                ? "Πληρωμή με κάρτα ή Apple Pay απευθείας στο κατάστημα."
-                : "Card or Apple Pay, paid directly to the venue."}
+              {payAmount !== undefined && payAmount > order.total + 0.005
+                ? lang === "el"
+                  ? `Περιλαμβάνει και τους προηγούμενους λογαριασμούς του τραπεζιού σας (αυτή η παραγγελία: ${money(order.total)}).`
+                  : `Includes your table's earlier orders (this order alone: ${money(order.total)}).`
+                : lang === "el"
+                  ? "Πληρωμή με κάρτα ή Apple Pay απευθείας στο κατάστημα."
+                  : "Card or Apple Pay, paid directly to the venue."}
             </p>
           )}
           {!terminal && (

@@ -160,6 +160,10 @@ export interface CreateOrderArgs {
   customerEmail?: string;
   /** "el-GR" | "en-GB" — the language the checkout page renders in. */
   requestLang?: string;
+  /** Where Viva sends the guest after a successful payment. */
+  successUrl?: string;
+  /** Where Viva sends the guest when the payment fails or is cancelled. */
+  failureUrl?: string;
 }
 
 export interface CreatedOrder {
@@ -187,6 +191,11 @@ export async function createPaymentOrder(
     // Omitted when empty: Viva then uses the merchant's default payment source.
     ...(creds.sourceCode ? { sourceCode: creds.sourceCode } : {}),
     ...(args.customerEmail ? { customerEmail: args.customerEmail } : {}),
+    // Without these Viva drops the guest on the bare host after paying, losing
+    // ?table= — the table then "resets". Keep both URLs pointing back at the
+    // menu with the table id intact.
+    ...(args.successUrl ? { successUrl: args.successUrl } : {}),
+    ...(args.failureUrl ? { failureUrl: args.failureUrl } : {}),
     requestLang: args.requestLang ?? "en-GB",
     // Smart Checkout requires this when the order is created server-side.
     allowRecurring: false,
