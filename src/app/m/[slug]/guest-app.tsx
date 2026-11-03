@@ -576,29 +576,65 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   }
 
   /**
-   * Read Viva's return parameters. `?paid=1` is only a UI hint — the real state
-   * is written by the webhook, so we confirm it against /api/pay/status rather
-   * than trusting the redirect.
+   * Read Viva's return parameters and reconcile the payment with Viva itself.
+   *
+   * The redirect is a UI hint, not proof of payment. Historically we just read
+   * /api/pay/status here, which only reflects what the webhook already wrote —
+   * so when the webhook did not arrive the guest was told "failed" after a
+   * perfectly good payment. Now we actively ask Viva to confirm the transaction
+   * before falling back to the stored status.
+   *
+   * Viva appends `t` (transaction id) to the success URL, which is exact and
+   * preferred. Without it we fall back to the table, and the server looks up the
+   * payment order it stored for that table.
    */
   useEffect(() => {
     if (!table) return;
     const qs = new URLSearchParams(window.location.search);
     const hint = qs.get("paid") ?? qs.get("s");
     if (!hint) return;
+    const transactionId = qs.get("t") ?? "";
     let cancelled = false;
-    fetch(`/api/pay/status?slug=${encodeURIComponent(venue.slug)}&tableId=${encodeURIComponent(table.id)}`)
+
+    const statusUrl = `/api/pay/status?slug=${encodeURIComponent(venue.slug)}&tableId=${encodeURIComponent(table.id)}`;
+
+    fetch(`/api/pay/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: venue.slug,
+        tableId: table.id,
+        ...(transactionId ? { transactionId } : {}),
+      }),
+    })
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { paid?: boolean; status?: string } | null) => {
-        if (cancelled || !data) return;
-        setPayResult(data.paid ? "paid" : "failed");
+      .then(async (data: { paid?: boolean } | null) => {
+        if (cancelled) return;
+        if (data?.paid) {
+          setPayResult("paid");
+          return;
+        }
+        // Confirmation could not settle it (e.g. the guest cancelled on Viva's
+        // page) — trust the stored state rather than assuming failure.
+        const r = await fetch(statusUrl);
+        const status = r.ok ? ((await r.json()) as { paid?: boolean }) : null;
+        if (cancelled || !status) return;
+        setPayResult(status.paid ? "paid" : "failed");
       })
-      .catch(() => {
-        /* status is best-effort; the webhook is the source of truth */
+      .catch(async () => {
+        // Network trouble must not turn a paid bill into "failed"; fall back to
+        // whatever the backend already knows.
+        if (cancelled) return;
+        const r = await fetch(statusUrl).catch(() => null);
+        const status = r && r.ok ? ((await r.json()) as { paid?: boolean }) : null;
+        if (cancelled || !status) return;
+        setPayResult(status.paid ? "paid" : "failed");
       })
       .finally(() => {
         // Strip the params so a refresh doesn't replay the banner.
         qs.delete("paid");
         qs.delete("s");
+        qs.delete("t");
         const clean = `${window.location.pathname}${qs.toString() ? `?${qs}` : ""}`;
         window.history.replaceState({}, "", clean);
       });
