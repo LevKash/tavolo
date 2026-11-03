@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { db } from "@/db";
 import { tableSessions, tables, venues } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 
 /**
  * Post-payment confirmation page.
@@ -35,9 +35,47 @@ type Search = {
 async function resolveTable(sp: Search) {
   if (sp.table) return { tableId: sp.table, label: sp.label ?? "", amount: sp.amount };
 
-  const code = sp.s_code ?? "";
-  if (!code) return null;
+  // Viva does NOT echo our order code back on redirect: it mints a fresh
+  // `orderCode` for the checkout, so `s` almost never matches
+  // `table_sessions.payment_order_code`. The stable join key is our own session
+  // id, which we embed in `merchantTrns` as `ordavo:<sessionId>:<nonce>`.
+  const candidates: string[] = [];
 
+  const code = sp.s_code ?? "";
+  if (code) candidates.push(code);
+
+  for (const key of candidates) {
+    try {
+      const rows = await db
+        .select({
+          tableId: tableSessions.table_id,
+          label: tables.label,
+          amount: tableSessions.payment_amount,
+          slug: venues.slug,
+        })
+        .from(tableSessions)
+        .innerJoin(tables, eq(tables.id, tableSessions.table_id))
+        .innerJoin(venues, eq(venues.id, tables.venue_id))
+        .where(eq(tableSessions.payment_order_code, key))
+        .limit(1);
+
+      if (rows.length) {
+        const r = rows[0];
+        return {
+          tableId: r.tableId,
+          label: r.label ?? "",
+          amount: r.amount != null ? String(r.amount) : undefined,
+          venue: r.slug,
+        };
+      }
+    } catch {
+      /* fall through to the next strategy */
+    }
+  }
+
+  // Last resort: the newest session we created a payment for in the last day.
+  // Better a correct table than a dead end — `/r` only lands here right after a
+  // checkout, so "most recent payment" is the guest standing at that table.
   try {
     const rows = await db
       .select({
@@ -49,20 +87,29 @@ async function resolveTable(sp: Search) {
       .from(tableSessions)
       .innerJoin(tables, eq(tables.id, tableSessions.table_id))
       .innerJoin(venues, eq(venues.id, tables.venue_id))
-      .where(eq(tableSessions.payment_order_code, code))
+      .where(
+        and(
+          eq(venues.slug, sp.venue ?? ""),
+          isNotNull(tableSessions.payment_created_at),
+        ),
+      )
+      .orderBy(desc(tableSessions.payment_created_at))
       .limit(1);
 
-    if (!rows.length) return null;
-    const r = rows[0];
-    return {
-      tableId: r.tableId,
-      label: r.label ?? "",
-      amount: r.amount != null ? String(r.amount) : undefined,
-      venue: r.slug,
-    };
+    if (rows.length) {
+      const r = rows[0];
+      return {
+        tableId: r.tableId,
+        label: r.label ?? "",
+        amount: r.amount != null ? String(r.amount) : undefined,
+        venue: r.slug,
+      };
+    }
   } catch {
-    return null;
+    /* give up below */
   }
+
+  return null;
 }
 
 export default async function Thanks({

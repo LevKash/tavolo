@@ -86,6 +86,10 @@ export async function GET(req: Request) {
     if (fail) target.searchParams.set("status", "failed");
     else target.searchParams.set("status", "paid");
     if (t) target.searchParams.set("t", t);
+    // Carry the order code through even when the session lookup missed: `/thanks`
+    // uses it as a second attempt at resolving the table, and without it the
+    // guest lands on a menu with no table attached.
+    if (s) target.searchParams.set("s_code", s);
     return NextResponse.redirect(target, 303);
   }
 
