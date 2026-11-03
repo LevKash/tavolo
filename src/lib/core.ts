@@ -309,7 +309,14 @@ export async function isSessionTrusted(sessionId: string): Promise<boolean> {
   return rows[0].n > 0;
 }
 
-const OPEN_ORDER_STATUS = ["new", "making", "served"] as const;
+/**
+ * Statuses that still belong on the guest's bill. `pending_confirm` is a real
+ * order waiting for the bar to accept it — the guest already committed to it,
+ * so it must count. Leaving it out made the Pay button show €0.00 right after
+ * the first order (a fresh session is never "trusted", so every first order
+ * lands in pending_confirm).
+ */
+const OPEN_ORDER_STATUS = ["pending_confirm", "new", "making", "served"] as const;
 
 /**
  * What is still owed on a sitting = every open order MINUS the ones already

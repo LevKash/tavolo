@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
           orders.session_id,
           openSessions.map((s) => s.id),
         ),
-        inArray(orders.status, ["new", "making", "served"] as const),
+        inArray(orders.status, ["pending_confirm", "new", "making", "served"] as const),
         ne(orders.payment_status, "paid"),
       ),
     );
@@ -99,16 +99,10 @@ export async function POST(req: NextRequest) {
   }
 
   const amountCents = Math.round(total * 100);
-  const cash = Math.round(Number(session.total ?? 0) * 100);
-  if (amountCents < cash) {
-    console.warn(
-      `[pay/session] underpay blocked: session ${session.id} cash ${cash}c vs payable ${amountCents}c`,
-    );
-    return NextResponse.json(
-      { error: "amount_inconsistent", detail: "session.total exceeds payable orders" },
-      { status: 409 },
-    );
-  }
+  // `total` is now summed across every open session of the table and already
+  // excludes paid orders, so it is the single source of truth. The old guard
+  // compared it against one session's stale payment_amount and could block a
+  // legitimate table-wide payment — drop it rather than serve a false 409.
 
   const creds = {
     env: (venue.viva_env === "live" ? "live" : "demo") as VivaEnv,
