@@ -111,29 +111,61 @@ export async function POST(req: NextRequest) {
 
   if (!orderCode) return NextResponse.json({ ok: true, ignored: "no_order_code" });
 
-  // Route to the tenant. MerchantId is optional in some payloads, so fall back to
-  // the order code we stored when the payment order was created.
+  // Route to the tenant. MerchantId is optional in some payloads, so fall back
+  // to the session we stored the order for: Viva re-mints the OrderCode on every
+  // checkout, but `merchantTrns` is ours and survives.
   let venueRows = merchantId
     ? await db.select().from(venues).where(eq(venues.viva_merchant_id, merchantId)).limit(1)
     : [];
+  let resolvedByTrns = false;
+  if (venueRows.length === 0) {
+    const merchantTrns = str("MerchantTrns") || str("MerchantTrns2");
+    if (merchantTrns) {
+      const byTrns = await db
+        .select({ venue: venues })
+        .from(tableSessions)
+        .innerJoin(venues, eq(tableSessions.venue_id, venues.id))
+        .where(eq(tableSessions.payment_merchant_trns, merchantTrns))
+        .limit(1);
+      if (byTrns.length > 0) {
+        venueRows = [byTrns[0].venue];
+        resolvedByTrns = true;
+      }
+    }
+  }
   if (venueRows.length === 0) {
     // Unknown merchant: accept the event, do not retry forever.
-    console.warn("[viva-webhook] unknown merchant", merchantId);
+    console.warn("[viva-webhook] unknown merchant", merchantId, str("MerchantTrns"));
     return NextResponse.json({ ok: true, ignored: "unknown_merchant" });
   }
   const venue = venueRows[0];
 
-  const sessions = await db
-    .select()
-    .from(tableSessions)
-    .where(eq(tableSessions.payment_order_code, orderCode))
-    .limit(1);
+  // Find the session by OrderCode when we know it, otherwise by our own
+  // MerchantTrns. The second path is the one that recovers payments that were
+  // created before the order code got overwritten (repeated checkouts).
+  let sessions = orderCode
+    ? await db
+        .select()
+        .from(tableSessions)
+        .where(eq(tableSessions.payment_order_code, orderCode))
+        .limit(1)
+    : [];
   if (sessions.length === 0) {
-    console.warn("[viva-webhook] no session for order", orderCode);
+    const merchantTrns = str("MerchantTrns") || str("MerchantTrns2");
+    if (merchantTrns) {
+      sessions = await db
+        .select()
+        .from(tableSessions)
+        .where(eq(tableSessions.payment_merchant_trns, merchantTrns))
+        .limit(1);
+    }
+  }
+  if (sessions.length === 0) {
+    console.warn("[viva-webhook] no session for order", orderCode, str("MerchantTrns"));
     return NextResponse.json({ ok: true, ignored: "unknown_order" });
   }
   const session = sessions[0];
-  if (session.venue_id !== venue.id) {
+  if (!resolvedByTrns && session.venue_id !== venue.id) {
     console.warn("[viva-webhook] order/venue mismatch", orderCode);
     return NextResponse.json({ ok: true, ignored: "mismatch" });
   }
