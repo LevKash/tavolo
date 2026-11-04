@@ -4,7 +4,6 @@ import { db } from "@/db";
 import { venues } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
 import DashVivaSettings, { type VivaSettingsData } from "@/components/dash-viva-settings";
-import { normalizeClientId } from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +21,7 @@ export default async function VivaSettingsPage() {
   // and only writes a new value when the owner types one.
   const data: VivaSettingsData = {
     env: venue.viva_env === "live" ? "live" : "demo",
-    clientId: normalizeClientId(venue.viva_client_id),
+    clientId: venue.viva_client_id ?? "",
     merchantId: venue.viva_merchant_id ?? "",
     sourceCode: venue.viva_source_code ?? "",
     hasSecret: Boolean(venue.viva_client_secret),

@@ -4,13 +4,7 @@ import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions, tables, venues } from "@/db/schema";
 import { getVenueBySlug } from "@/lib/core";
-import {
-  createPaymentOrder,
-  credentialsComplete,
-  endpointsFor,
-  normalizeClientId,
-  type VivaEnv,
-} from "@/lib/viva";
+import { createPaymentOrder, credentialsComplete, endpointsFor, type VivaEnv } from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
 
@@ -112,7 +106,7 @@ export async function POST(req: NextRequest) {
 
   const creds = {
     env: (venue.viva_env === "live" ? "live" : "demo") as VivaEnv,
-    clientId: normalizeClientId(venue.viva_client_id),
+    clientId: venue.viva_client_id,
     clientSecret: venue.viva_client_secret,
     merchantId: venue.viva_merchant_id,
     sourceCode: venue.viva_source_code,

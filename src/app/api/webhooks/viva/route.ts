@@ -6,7 +6,6 @@ import { closeTableSession, settlePaidOrders } from "@/lib/core";
 import {
   credentialsComplete,
   fetchWebhookKey,
-  normalizeClientId,
   retrieveTransaction,
   type VivaEnv,
 } from "@/lib/viva";
@@ -175,7 +174,7 @@ export async function POST(req: NextRequest) {
   // the API and use THAT status. Webhooks can be replayed or spoofed.
   const creds = {
     env: (venue.viva_env === "live" ? "live" : "demo") as VivaEnv,
-    clientId: normalizeClientId(venue.viva_client_id),
+    clientId: venue.viva_client_id,
     clientSecret: venue.viva_client_secret,
     merchantId: venue.viva_merchant_id,
     sourceCode: venue.viva_source_code,
