@@ -80,9 +80,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ignored: "non_json" });
   }
 
+  // Viva wraps the actual transaction in `EventData` and keeps only metadata
+  // (`EventTypeId`, `MessageId`, `Created`…) at the top level. Reading the top
+  // level alone made every field empty, so payments were accepted with
+  // `200 ignored: no_order_code` and never reached the database. Some payload
+  // shapes (and the ISV/test sender) flatten the body instead — read both.
+  const envelope = payload;
+  const envelopeEventData = envelope["EventData"];
+  const data =
+    envelopeEventData && typeof envelopeEventData === "object"
+      ? (envelopeEventData as Record<string, unknown>)
+      : {};
   const str = (k: string) => {
-    const v = payload[k];
-    return v === undefined || v === null ? "" : String(v);
+    for (const src of [data, envelope]) {
+      const v = src[k];
+      if (v !== undefined && v !== null && v !== "") return String(v);
+    }
+    return "";
   };
 
   const merchantId = str("MerchantId");
