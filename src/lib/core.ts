@@ -33,6 +33,7 @@ import type {
   QueueOrderView,
   VenuePublic,
 } from "@/lib/types";
+import { paymentsAllowed } from "@/lib/site";
 import { formatTableLabel, orderRef, startOfToday } from "@/lib/util";
 
 // ---------------------------------------------------------------- venue
@@ -56,7 +57,7 @@ export function toVenuePublic(v: Venue): VenuePublic {
     published: v.is_published,
     passportEnabled: v.passport_enabled,
     // Expose the flag only — never the credentials.
-    paymentsEnabled: Boolean(v.payments_enabled),
+    paymentsEnabled: paymentsAllowed() && Boolean(v.payments_enabled),
   };
 }
 
@@ -283,17 +284,48 @@ export async function getOpenSession(
 }
 
 /** Open a session for a table if none is open (like a waiter opening a POS table). */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Find the table's open session or create it, safely under concurrency.
+ * A transaction-scoped advisory lock keyed on the table serialises callers, so
+ * two guests scanning at once cannot each insert their own "open" session
+ * (which used to leave orders in a session that billing and closing ignored).
+ * Works with or without the partial unique index on open sessions.
+ */
+async function findOrCreateOpenSession(
+  tx: Tx,
+  venueId: string,
+  tableId: string,
+): Promise<TableSession> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`session:${tableId}`}))`);
+  const rows = await tx
+    .select()
+    .from(tableSessions)
+    .where(
+      and(
+        eq(tableSessions.venue_id, venueId),
+        eq(tableSessions.table_id, tableId),
+        eq(tableSessions.status, "open"),
+      ),
+    )
+    .orderBy(desc(tableSessions.opened_at))
+    .limit(1);
+  if (rows[0]) return rows[0];
+  const created = await tx
+    .insert(tableSessions)
+    .values({ venue_id: venueId, table_id: tableId })
+    .returning();
+  return created[0];
+}
+
 export async function openSessionForTable(
   venueId: string,
   tableId: string,
 ): Promise<TableSession> {
   const existing = await getOpenSession(venueId, tableId);
   if (existing) return existing;
-  const rows = await db
-    .insert(tableSessions)
-    .values({ venue_id: venueId, table_id: tableId })
-    .returning();
-  return rows[0];
+  return db.transaction((tx) => findOrCreateOpenSession(tx, venueId, tableId));
 }
 
 export async function isSessionTrusted(sessionId: string): Promise<boolean> {
@@ -449,6 +481,46 @@ export async function settlePaidOrders(venueId: string, orderIds: string[]) {
   return rows.length;
 }
 
+/**
+ * Close tables nobody is using any more, so staff never have to.
+ * - A session with no orders at all is just someone who scanned the QR: closed
+ *   after 45 minutes.
+ * - A session whose last order is older than 3 hours and that has nothing still
+ *   waiting (pending_confirm / new / making, ignoring ones stuck for over 6 h) is
+ *   closed, and its served orders are marked closed.
+ * Runs at most once a minute per venue (it is called from the polled bar payload).
+ */
+const lastExpiry = new Map<string, number>();
+export async function expireIdleSessions(venueId: string): Promise<number> {
+  const nowMs = Date.now();
+  if (nowMs - (lastExpiry.get(venueId) ?? 0) < 60_000) return 0;
+  lastExpiry.set(venueId, nowMs);
+  const res = await db.execute(sql`
+    update table_sessions s
+       set status = 'closed', closed_at = now()
+     where s.venue_id = ${venueId}
+       and s.status = 'open'
+       and not exists (
+         select 1 from orders o
+          where o.session_id = s.id
+            and o.status in ('pending_confirm', 'new', 'making')
+            and o.created_at > now() - interval '6 hours')
+       and coalesce(
+             (select max(o.created_at) from orders o where o.session_id = s.id),
+             s.opened_at)
+           < now() - (case when exists (select 1 from orders o where o.session_id = s.id)
+                           then interval '3 hours' else interval '45 minutes' end)
+    returning s.id`);
+  const ids = (res.rows as { id: string }[]).map((r) => r.id);
+  if (ids.length > 0) {
+    await db
+      .update(orders)
+      .set({ status: "closed", closed_at: new Date() })
+      .where(and(inArray(orders.session_id, ids), eq(orders.status, "served")));
+  }
+  return ids.length;
+}
+
 /** Close a table (payment done at the cash desk). Ends the session. */
 export async function closeTableSession(venueId: string, tableId: string) {
   const session = await getOpenSession(venueId, tableId);
@@ -569,6 +641,8 @@ async function loadLines(orderIds: string[]): Promise<Map<string, LinePublic[]>>
 
 export async function buildBarPayload(venue: Venue): Promise<BarPayload> {
   const venuePub = toVenuePublic(venue);
+  // Housekeeping: tables nobody uses close by themselves (throttled, never throws).
+  await expireIdleSessions(venue.id).catch(() => 0);
 
   const tableRows = await db
     .select()
@@ -866,28 +940,8 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   const tableId = input.tableId;
 
   const result = await db.transaction(async (tx) => {
-    // Re-check open session inside the transaction.
-    const openRows = await tx
-      .select()
-      .from(tableSessions)
-      .where(
-        and(
-          eq(tableSessions.venue_id, venueId),
-          eq(tableSessions.table_id, tableId),
-          eq(tableSessions.status, "open"),
-        ),
-      )
-      .limit(1);
-    let session: TableSession;
-    if (openRows.length > 0) {
-      session = openRows[0];
-    } else {
-      const created = await tx
-        .insert(tableSessions)
-        .values({ venue_id: venueId, table_id: tableId })
-        .returning();
-      session = created[0];
-    }
+    // Find or create the open session under a per-table lock.
+    const session = await findOrCreateOpenSession(tx, venueId, tableId);
 
     const venueFlags = await tx
       .select({ passport_enabled: venues.passport_enabled })

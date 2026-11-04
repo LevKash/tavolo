@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { requireAdmin } from "@/lib/auth";
+import { siteHost } from "@/lib/site";
 import { asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { users, venues } from "@/db/schema";
@@ -17,6 +19,7 @@ function fmtDate(d: Date): string {
 }
 
 export default async function AdminPage() {
+  await requireAdmin();
   const pending = await db
     .select()
     .from(venues)
@@ -74,7 +77,7 @@ export default async function AdminPage() {
                     <StatusChip status={v.status} />
                   </div>
                   <p className="mt-1 font-mono text-xs text-fog">
-                    ordavo.app/m/{v.slug}
+                    {siteHost()}/m/{v.slug}
                   </p>
                   <p className="mt-1 truncate text-xs text-fog">
                     {o?.name ?? "?"} — {o?.email ?? "?"}

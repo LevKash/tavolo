@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "@fontsource/cormorant-garamond/400.css";
 import "@fontsource/cormorant-garamond/500.css";
@@ -11,10 +11,32 @@ import "@fontsource/manrope/700.css";
 import "@fontsource/manrope/800.css";
 import "./globals.css";
 
+const TITLE = "Ordavo — QR ordering for bars and beach bars";
+const DESCRIPTION =
+  "Guests scan a QR code on the table or sunbed, choose from a menu with photos and tap Send. The order appears on a phone or tablet behind the bar. Free 3-week pilot for bars, beach bars and tavernas.";
+
 export const metadata: Metadata = {
-  title: "Ordavo — QR table ordering for cocktail bars",
-  description:
-    "Guests scan the QR on their table and order drinks from their phone. Staff confirm, the bar pours, and you run everything from one dashboard.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL ?? "https://ordavo.vercel.app"),
+  title: { default: TITLE, template: "%s · Ordavo" },
+  description: DESCRIPTION,
+  applicationName: "Ordavo",
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    siteName: "Ordavo",
+    title: TITLE,
+    description: DESCRIPTION,
+    // image comes from src/app/opengraph-image.tsx
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0e0d0b",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

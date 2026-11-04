@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { venues } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
+import { paymentsAllowed } from "@/lib/site";
 import DashVivaSettings, { type VivaSettingsData } from "@/components/dash-viva-settings";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,12 @@ export default async function VivaSettingsPage() {
         Let guests pay their table from their phone. Money goes straight into your own
         Viva Wallet account — Ordavo never touches the funds and never sees the card.
       </p>
+      {!paymentsAllowed() && (
+        <p className="mt-4 rounded-lg border border-gold/25 bg-gold/5 p-3 text-xs leading-relaxed text-fog">
+          In-app payment is not switched on for the platform yet. You can save your
+          Viva details now; guests will not see a Pay button until Ordavo enables it.
+        </p>
+      )}
       <DashVivaSettings initial={data} />
     </div>
   );

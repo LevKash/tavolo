@@ -12,7 +12,9 @@ import {
 } from "drizzle-orm/pg-core";
 
 /** Users who own venues. */
-export const users = pgTable("users", {
+export const users = pgTable(
+  "users",
+  {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   name: text("name").notNull(),
@@ -21,10 +23,15 @@ export const users = pgTable("users", {
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()
     .defaultNow(),
-});
+},
+  // Emails are stored lower-cased at signup, so a plain unique index is enough.
+  (t) => [uniqueIndex("users_email_uq").on(t.email)],
+);
 
 /** HttpOnly session tokens (30 days). */
-export const sessions = pgTable("sessions", {
+export const sessions = pgTable(
+  "sessions",
+  {
   id: uuid("id").primaryKey().defaultRandom(),
   user_id: uuid("user_id")
     .notNull()
@@ -36,10 +43,14 @@ export const sessions = pgTable("sessions", {
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()
     .defaultNow(),
-});
+  },
+  (t) => [uniqueIndex("sessions_token_uq").on(t.token)],
+);
 
 /** A bar / tavern venue (white-label tenant). */
-export const venues = pgTable("venues", {
+export const venues = pgTable(
+  "venues",
+  {
   id: uuid("id").primaryKey().defaultRandom(),
   owner_id: uuid("owner_id")
     .notNull()
@@ -82,7 +93,9 @@ export const venues = pgTable("venues", {
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()
     .defaultNow(),
-});
+  },
+  (t) => [uniqueIndex("venues_slug_uq").on(t.slug)],
+);
 
 /** Physical tables (each has its own QR). */
 export const tables = pgTable(
@@ -139,6 +152,10 @@ export const tableSessions = pgTable(
   (t) => [
     index("table_sessions_table_idx").on(t.table_id, t.status),
     index("table_sessions_venue_idx").on(t.venue_id, t.status),
+    // At most one OPEN session per table (partial unique index).
+    uniqueIndex("table_sessions_one_open_uq")
+      .on(t.table_id)
+      .where(sql`${t.status} = 'open'`),
   ],
 );
 
@@ -227,6 +244,7 @@ export const orders = pgTable(
   (t) => [
     index("orders_venue_created_idx").on(t.venue_id, t.created_at),
     index("orders_session_idx").on(t.session_id),
+    index("orders_venue_status_idx").on(t.venue_id, t.status),
     index("orders_table_idx").on(t.table_id),
   ],
 );

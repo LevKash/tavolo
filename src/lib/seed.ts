@@ -12,7 +12,9 @@ import {
   venues,
   wheelSpins,
 } from "@/db/schema";
+import { randomBytes } from "crypto";
 import { hashPassword } from "@/lib/auth";
+import { randomPin } from "@/lib/site";
 
 type NewItem = {
   name: string;
@@ -260,7 +262,11 @@ async function doSeed(): Promise<void> {
       .values({
         email: "demo@ambrosia.gr",
         name: "Demo Owner",
-        password_hash: await hashPassword("demo1234"),
+        // Never a published default. Set DEMO_OWNER_PASSWORD to log in as the demo
+        // owner; otherwise the password is random and the account is unusable.
+        password_hash: await hashPassword(
+          process.env.DEMO_OWNER_PASSWORD || randomBytes(18).toString("hex"),
+        ),
         // Regular venue owner — the demo account has NO platform-admin access.
         // Platform admins are never seeded; they are granted by an existing
         // admin from /admin/admins (Accounts tab).
@@ -285,7 +291,7 @@ async function doSeed(): Promise<void> {
         instagram: "@ambrosia.cocktailbar",
         wifi_name: "AMBROSIA-GUEST",
         wifi_password: "nectar2024",
-        bar_pin: "1234",
+        bar_pin: process.env.DEMO_BAR_PIN || randomPin(),
         plan: "pro",
         is_published: true,
       })

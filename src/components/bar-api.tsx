@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BarPayload } from "@/lib/types";
+import { playChime } from "@/lib/util";
 
 /** Polls /api/bar/orders every 3s once a pin is available. */
 export function useBarPayload(slug: string, pin: string | null) {
@@ -53,6 +54,54 @@ export function useBarPayload(slug: string, pin: string | null) {
   }, [slug, pin, token]);
 
   return { data, unauthorized, error, refresh, invalidate };
+}
+
+/**
+ * Sound and highlight for anything that needs a person right now: orders waiting
+ * for confirmation, waiter calls and (on the bar screen) confirmed orders
+ * entering the queue. The first payload after opening the screen only seeds the
+ * known set, so reloading does not beep for old items. While anything is still
+ * waiting for confirmation or a call is unanswered, the chime repeats every 30 s
+ * so a missed order does not sit unnoticed.
+ */
+export function useAlertSounds(data: BarPayload | null, includeQueue: boolean) {
+  const known = useRef<Set<string> | null>(null);
+  const latest = useRef<BarPayload | null>(null);
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    latest.current = data;
+    if (!data) return;
+    const keys = [
+      ...data.pending.map((o) => `p:${o.id}`),
+      ...data.calls.map((c) => `c:${c.id}`),
+      ...(includeQueue
+        ? data.queue.filter((o) => o.status === "new").map((o) => `q:${o.id}`)
+        : []),
+    ];
+    if (known.current === null) {
+      known.current = new Set(keys);
+      return;
+    }
+    const seen = known.current;
+    const arrivals = keys.filter((k) => !seen.has(k));
+    known.current = new Set(keys);
+    if (arrivals.length === 0) return;
+    playChime();
+    setFresh(new Set(arrivals.map((k) => k.slice(2))));
+    const t = window.setTimeout(() => setFresh(new Set()), 6000);
+    return () => window.clearTimeout(t);
+  }, [data, includeQueue]);
+
+  useEffect(() => {
+    const iv = window.setInterval(() => {
+      const d = latest.current;
+      if (d && (d.pending.length > 0 || d.calls.length > 0)) playChime();
+    }, 30000);
+    return () => window.clearInterval(iv);
+  }, []);
+
+  return fresh;
 }
 
 export async function apiPost(path: string, body: Record<string, unknown>) {
@@ -111,7 +160,7 @@ export function PinGate(props: {
             Unlock
           </button>
           <p className="mt-3 text-[11px] text-fog-2">
-            Demo venue PIN: 1234 · Ask the owner otherwise.
+            Ask the venue owner for the PIN.
           </p>
         </form>
       </div>

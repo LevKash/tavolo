@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { requireAdmin } from "@/lib/auth";
+import { siteHost } from "@/lib/site";
 import { getVenueForAdmin, VENUE_PLANS } from "@/lib/core";
 import { ApproveForm, DeclineForm } from "../../review-buttons";
 import { StatusChip } from "../../status-chip";
@@ -23,6 +25,7 @@ export default async function AdminVenuePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requireAdmin();
   const { id } = await params;
   const row = await getVenueForAdmin(id);
   if (!row) notFound();
@@ -45,7 +48,7 @@ export default async function AdminVenuePage({
             </h1>
             <StatusChip status={v.status} />
           </div>
-          <p className="mt-1 font-mono text-xs text-fog">ordavo.app/m/{v.slug}</p>
+          <p className="mt-1 font-mono text-xs text-fog">{siteHost()}/m/{v.slug}</p>
           <p className="mt-1 text-xs text-fog">
             Owner: <span className="text-cream">{o?.name ?? "?"}</span> —{" "}
             {o?.email ?? "?"}

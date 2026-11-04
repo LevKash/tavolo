@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { PinGate, apiPost, useBarPayload } from "@/components/bar-api";
-import { cn, money, playChime, timeAgo } from "@/lib/util";
+import { useCallback, useEffect, useState } from "react";
+import { PinGate, apiPost, useAlertSounds, useBarPayload } from "@/components/bar-api";
+import { cn, money, timeAgo } from "@/lib/util";
 
 const STORE_KEY = "ordavo_bar_pin";
 
@@ -16,8 +16,6 @@ export default function BarApp(props: {
   const [wrongPin, setWrongPin] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
-  const knownIds = useRef<Set<string>>(new Set());
   const { data, unauthorized, error, refresh } = useBarPayload(slug, pin);
 
   useEffect(() => {
@@ -45,19 +43,8 @@ export default function BarApp(props: {
     return () => window.clearInterval(iv);
   }, []);
 
-  // Chime + highlight for brand-new confirmed orders entering the queue.
-  useEffect(() => {
-    if (!data) return;
-    const ids = new Set(data.queue.map((o) => o.id));
-    const arrivals = data.queue.filter((o) => !knownIds.current.has(o.id) && o.status === "new");
-    knownIds.current = ids;
-    if (arrivals.length > 0) {
-      playChime();
-      setFreshIds(new Set(arrivals.map((o) => o.id)));
-      const t = window.setTimeout(() => setFreshIds(new Set()), 6000);
-      return () => window.clearTimeout(t);
-    }
-  }, [data]);
+  // Chime + highlight for orders to confirm, waiter calls and new queue items.
+  const freshIds = useAlertSounds(data, true);
 
   const flash = useCallback((msg: string) => {
     setActionMsg(msg);

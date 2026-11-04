@@ -56,8 +56,42 @@ export function orderRef(id: string) {
   return id.replace(/-/g, "").slice(0, 4).toUpperCase();
 }
 
-export function startOfToday(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const VENUE_TZ = "Europe/Athens";
+/** A bar's trading day runs past midnight, so the "day" starts at 05:00 local. */
+const BUSINESS_DAY_START_HOUR = 5;
+
+/** Offset of VENUE_TZ from UTC at the given instant, in ms (handles DST). */
+function tzOffsetMs(at: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: VENUE_TZ,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(at);
+  const g = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const asUtc = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute"), g("second"));
+  return asUtc - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/**
+ * Start of the current trading day in Athens time (05:00 local), as a UTC
+ * instant. The server runs in UTC, so plain Date arithmetic would roll the day
+ * over at 02:00-03:00 Athens time, in the middle of a busy night.
+ */
+export function startOfToday(d = new Date()): Date {
+  const off = tzOffsetMs(d);
+  const local = new Date(d.getTime() + off); // UTC fields now read as Athens wall clock
+  let day = local.getUTCDate();
+  if (local.getUTCHours() < BUSINESS_DAY_START_HOUR) day -= 1;
+  const y = local.getUTCFullYear();
+  const m = local.getUTCMonth();
+  const wall = Date.UTC(y, m, day, BUSINESS_DAY_START_HOUR, 0, 0);
+  // Re-read the offset at the candidate instant in case DST changed since.
+  return new Date(wall - tzOffsetMs(new Date(wall - off)));
 }
 
 export function slugify(s: string) {

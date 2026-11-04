@@ -88,6 +88,17 @@ export async function requireUser(): Promise<User> {
   return user;
 }
 
+/**
+ * Guard for platform-admin pages and actions. Every admin page must call this
+ * itself: the admin layout also checks, but Next.js does not guarantee a layout
+ * re-runs on every navigation, so the layout is not a security boundary.
+ */
+export async function requireAdmin(): Promise<User> {
+  const user = await requireUser();
+  if (!user.is_admin) redirect("/dashboard");
+  return user;
+}
+
 export async function logoutUser() {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;

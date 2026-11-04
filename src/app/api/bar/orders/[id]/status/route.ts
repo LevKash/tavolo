@@ -28,7 +28,10 @@ export async function POST(
     return NextResponse.json({ error: "Invalid venue or PIN" }, { status: 401 });
   }
   const next = body.status ?? "";
-  if (!TRANSITIONS[next]) {
+  // Valid targets are every status some state can move to (TRANSITIONS is keyed
+  // by the CURRENT status, so checking the key of `next` rejected "closed").
+  const validTargets = new Set(Object.values(TRANSITIONS).flat());
+  if (!validTargets.has(next)) {
     return NextResponse.json({ error: "Invalid target status" }, { status: 400 });
   }
   const row = await db

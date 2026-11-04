@@ -23,6 +23,7 @@ import {
   createSessionToken,
   hashPassword,
   logoutUser,
+  requireAdmin,
   requireUser,
   setSessionCookie,
   verifyPassword,
@@ -33,6 +34,7 @@ import {
   VENUE_PLANS,
 } from "@/lib/core";
 import { ensureSeeded } from "@/lib/seed";
+import { randomPin, siteUrl } from "@/lib/site";
 import { notifyOperator } from "@/lib/tg";
 import {
   credentialsComplete,
@@ -163,7 +165,8 @@ export async function signupAction(input: {
         slug,
         name: venueName,
         tagline: "Welcome — edit your venue details in Settings",
-        bar_pin: "1234",
+        // Random per venue: a shared default PIN would open every new bar screen.
+        bar_pin: randomPin(),
         // New venues start unpublished and gated behind the approval queue.
         is_published: false,
         status: "pending",
@@ -183,7 +186,7 @@ export async function signupAction(input: {
         "🆕 Ordavo — new venue application",
         `${venueName}  (${slug})`,
         `${name} — ${email}`,
-        "https://ordavo.app/admin",
+        `${siteUrl()}/admin`,
       ].join("\n"),
     );
   } catch (err) {
@@ -199,6 +202,25 @@ export async function logoutAction() {
 }
 
 // ---------------------------------------------------------------- settings
+
+const WEAK_PINS = new Set(["1234", "4321", "123456", "654321", "0123", "1212"]);
+
+const OWNER_EDITABLE_FIELDS = [
+  "name",
+  "tagline",
+  "description",
+  "currency",
+  "accent_color",
+  "logo_url",
+  "address",
+  "phone",
+  "hours",
+  "instagram",
+  "wifi_name",
+  "wifi_password",
+  "bar_pin",
+  "is_published",
+] as const;
 
 export async function updateVenueAction(
   fields: Partial<{
@@ -219,7 +241,16 @@ export async function updateVenueAction(
   }>,
 ): Promise<ActionRes> {
   const venue = await getOwnerVenue();
-  const built = buildVenuePatch(fields);
+  // Server actions are public POST endpoints: the TypeScript type above does not
+  // constrain what a client sends. Copy only the fields an owner may change, so
+  // plan, slug, owner, payment flags and Viva credentials cannot be set here.
+  const safe: Record<string, unknown> = {};
+  for (const k of OWNER_EDITABLE_FIELDS) {
+    if (k in (fields as Record<string, unknown>)) {
+      safe[k] = (fields as Record<string, unknown>)[k];
+    }
+  }
+  const built = buildVenuePatch(safe);
   if ("error" in built) return { error: built.error };
   try {
     await db.update(venues).set(built.patch).where(eq(venues.id, venue.id));
@@ -245,6 +276,9 @@ function buildVenuePatch(
   if ("bar_pin" in patch) {
     const pin = String(patch.bar_pin ?? "");
     if (!/^\d{4,6}$/.test(pin)) return { error: "Bar PIN must be 4–6 digits." };
+    if (WEAK_PINS.has(pin) || /^(\d)\1+$/.test(pin)) {
+      return { error: "That PIN is too easy to guess. Choose another one." };
+    }
     patch.bar_pin = pin;
   }
   if ("name" in patch) {
@@ -436,7 +470,13 @@ export async function moveItemAction(
   id: string,
   dir: -1 | 1,
 ): Promise<ActionRes> {
-  const item = await db.select().from(menuItems).where(eq(menuItems.id, id)).limit(1);
+  const venue = await getOwnerVenue();
+  if (dir !== -1 && dir !== 1) return { error: "Invalid direction." };
+  const item = await db
+    .select()
+    .from(menuItems)
+    .where(and(eq(menuItems.id, id), eq(menuItems.venue_id, venue.id)))
+    .limit(1);
   if (item.length === 0) return { ok: true };
   const list = await db
     .select()
@@ -564,11 +604,6 @@ export async function purgeTableSessionsAction(tableId: string): Promise<ActionR
 
 // ---------------------------------------------------------------- admin queue
 
-async function requireAdmin() {
-  const user = await requireUser();
-  if (!user.is_admin) redirect("/dashboard");
-  return user;
-}
 
 async function reviewVenue(venueId: string, status: "active" | "rejected") {
   await requireAdmin();

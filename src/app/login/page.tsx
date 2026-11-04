@@ -17,10 +17,6 @@ export default function LoginPage() {
           <h1 className="serif text-2xl font-semibold text-cream">Welcome back</h1>
           <p className="mt-1 text-sm text-fog">Log in to your venue dashboard.</p>
           <LoginForm />
-          <div className="mt-5 rounded-lg border border-gold/20 bg-gold/5 p-3 text-xs text-fog">
-            <span className="font-semibold text-gold-2">Demo venue:</span>{" "}
-            demo@ambrosia.gr · demo1234
-          </div>
         </div>
         <p className="mt-5 text-center text-sm text-fog">
           No account yet?{" "}

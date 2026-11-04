@@ -1,11 +1,11 @@
-import { requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { listAdminUsers, listAllAccounts } from "@/lib/core";
 import { DeleteAccountButton, DemoteButton, PromoteForm } from "./admin-forms";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminAdminsPage() {
-  const me = await requireUser();
+  const me = await requireAdmin();
   const admins = await listAdminUsers();
   const accounts = await listAllAccounts();
 

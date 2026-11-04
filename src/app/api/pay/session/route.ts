@@ -4,6 +4,7 @@ import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions, tables, venues } from "@/db/schema";
 import { getVenueBySlug } from "@/lib/core";
+import { paymentsAllowed } from "@/lib/site";
 import { createPaymentOrder, credentialsComplete, endpointsFor, type VivaEnv } from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
   if (!venue.is_published) {
     return NextResponse.json({ error: "Menu is offline" }, { status: 403 });
   }
-  if (!venue.payments_enabled) {
+  if (!paymentsAllowed() || !venue.payments_enabled) {
     return NextResponse.json({ error: "payments_disabled" }, { status: 409 });
   }
 

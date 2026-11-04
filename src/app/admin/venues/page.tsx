@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { requireAdmin } from "@/lib/auth";
 import {
   countVenuesByStatus,
   isVenueStatus,
@@ -24,6 +25,7 @@ export default async function AdminVenuesPage({
 }: {
   searchParams: Promise<{ q?: string; status?: string }>;
 }) {
+  await requireAdmin();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
   const status: VenueStatus | undefined = isVenueStatus(sp.status)

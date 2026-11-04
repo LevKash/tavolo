@@ -156,7 +156,14 @@ export default function DashSettings(props: { venue: SettingsData }) {
           </Field>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Bar / staff PIN" hint="4–6 digits, unlocks bar & staff screens">
+          <Field
+            label="Bar / staff PIN"
+            hint={
+              ["1234", "0000", "1111", "123456", "4321"].includes(form.bar_pin)
+                ? "This PIN is too easy to guess. Choose another one."
+                : "4–6 digits, unlocks bar & staff screens"
+            }
+          >
             <input
               className="input tracking-[0.4em]"
               inputMode="numeric"

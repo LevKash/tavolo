@@ -1,145 +1,225 @@
+// NOTE: public marketing copy (EN/EL). Greek wording is a draft and should be read by a native speaker.
+import type { Metadata } from "next";
 import Link from "next/link";
+import {
+  PageShell,
+  focusRing,
+  langHref,
+  pageAlternates,
+  resolveLang,
+  type Lang,
+} from "@/components/site-chrome";
+import {
+  HEADLINE,
+  MEASURE,
+  STAYS,
+  STEPS,
+  SUBLINE,
+  CheckIcon,
+  StaysList,
+  StepsGrid,
+} from "@/components/site-copy";
+import { SiteReel } from "@/components/site-reel";
 
-const steps = [
-  {
-    n: "01",
-    title: "Guests scan the table QR",
-    body: "The menu opens instantly on their phone — no app, no login, no waiting for a waiter. Scanning opens the table in your POS automatically.",
-  },
-  {
-    n: "02",
-    title: "Staff confirm, the bar pours",
-    body: "The first order of every new table is held for a quick staff check — prank-proof. Then every round goes straight to the bar queue.",
-  },
-  {
-    n: "03",
-    title: "You run it from one dashboard",
-    body: "Live sales, menu editor, tables and print-ready QR sheets — plus staff and bar screens protected by a simple PIN.",
-  },
-];
+type Props = { searchParams: Promise<{ lang?: string | string[] }> };
 
-const features = [
-  ["🪄", "Instant guest menu", "Menu as the very first paint after the scan — bilingual EN/EL, search, category chips, allergen icons."],
-  ["🛡️", "Anti-fraud confirmation", "First order of a session waits for staff confirmation before it reaches the bar. The table becomes trusted after that."],
-  ["🍸", "Wheel of luck", "Guests who can't decide spin for a random available drink — a fun upsell that logs every spin."],
-  ["🖨️", "QR codes built in", "SVG + PNG per table, plus a printable sheet of every table QR. Pointed straight at your venue's menu."],
-  ["🔔", "Live bar & staff screens", "Order queue with start/serve states, waiter calls with sound alerts, open tables with running totals."],
-  ["📊", "Owner dashboard", "Today's revenue, average ticket, top items and orders by table — polling live every 3 seconds."],
-];
+const meta = {
+  en: {
+    title: "Ordavo — QR ordering for bars and beach bars",
+    description:
+      "Guests scan a QR code on the table or sunbed, choose from a menu with photos and tap Send. The order appears on a phone or tablet behind the bar. Free 3-week pilot.",
+  },
+  el: {
+    title: "Ordavo — Παραγγελίες με QR για μπαρ και μπιτς μπαρ",
+    description:
+      "Οι πελάτες σκανάρουν ένα QR στο τραπέζι ή στην ξαπλώστρα, διαλέγουν από μενού με φωτογραφίες και πατούν Αποστολή. Η παραγγελία εμφανίζεται σε κινητό ή tablet πίσω από το μπαρ. Δωρεάν πιλοτικό 3 εβδομάδων.",
+  },
+} as const;
 
-export default function LandingPage() {
+export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
+  const lang = resolveLang((await searchParams).lang);
+  return {
+    title: { absolute: meta[lang].title },
+    description: meta[lang].description,
+    alternates: pageAlternates("/", lang),
+    openGraph: { title: meta[lang].title, description: meta[lang].description, locale: lang === "el" ? "el_GR" : "en_US" },
+  };
+}
+
+const t = {
+  en: {
+    ctaPilot: "Request a free pilot",
+    ctaDemo: "Try the guest menu",
+    reelLabel: "Short film showing how a guest orders by scanning a QR code on the table",
+    reelHint: "Tap the video for sound and controls",
+    builtFor: "Built for",
+    venues: ["Beach bars", "Cocktail bars", "Tavernas", "Cafés"],
+    pilotKicker: "The pilot",
+    pilotTitle: "Try it for 3 weeks. Free.",
+    pilotBody:
+      "We set up your menu and QR codes. You use Ordavo in real service for three weeks. Then we sit down and look at the numbers together, and you decide whether to continue.",
+    pilotMeasureTitle: "We look at",
+    pilotDecide: "You decide at the end. No obligation.",
+    faqTitle: "Questions",
+    faq: [
+      ["Does it replace my cash register?", "No. Your cash register stays exactly as it is."],
+      ["Do guests need an app?", "No. They scan the QR code and the menu opens in their phone's browser."],
+      ["Which languages?", "English and Greek."],
+      ["Who takes payment?", "You, the way you do today."],
+      ["What does it cost after the pilot?", "We agree the price with you before the pilot starts."],
+    ],
+    finalTitle: "Want to see it in your venue?",
+    finalBody: "Tell us where you are. We will get back to you personally.",
+  },
+  el: {
+    ctaPilot: "Ζητήστε δωρεάν πιλοτικό",
+    ctaDemo: "Δοκιμάστε το μενού των πελατών",
+    reelLabel: "Σύντομο βίντεο που δείχνει πώς ένας πελάτης παραγγέλνει σκανάροντας ένα QR στο τραπέζι",
+    reelHint: "Πατήστε το βίντεο για ήχο και χειριστήρια",
+    builtFor: "Για",
+    venues: ["Μπιτς μπαρ", "Κοκτέιλ μπαρ", "Ταβέρνες", "Καφέ"],
+    pilotKicker: "Το πιλοτικό",
+    pilotTitle: "Δοκιμάστε το για 3 εβδομάδες. Δωρεάν.",
+    pilotBody:
+      "Φτιάχνουμε το μενού και τα QR σας. Χρησιμοποιείτε το Ordavo σε κανονικό σέρβις για τρεις εβδομάδες. Μετά κάθουμε μαζί, βλέπουμε τα νούμερα και αποφασίζετε εσείς αν θα συνεχίσετε.",
+    pilotMeasureTitle: "Κοιτάμε",
+    pilotDecide: "Αποφασίζετε εσείς στο τέλος. Χωρίς υποχρέωση.",
+    faqTitle: "Ερωτήσεις",
+    faq: [
+      ["Αντικαθιστά το ταμείο μου;", "Όχι. Το ταμείο σας μένει ακριβώς όπως είναι."],
+      ["Χρειάζονται οι πελάτες εφαρμογή;", "Όχι. Σκανάρουν το QR και το μενού ανοίγει στον browser του κινητού τους."],
+      ["Σε ποιες γλώσσες;", "Αγγλικά και ελληνικά."],
+      ["Ποιος εισπράττει την πληρωμή;", "Εσείς, όπως σήμερα."],
+      ["Πόσο κοστίζει μετά το πιλοτικό;", "Συμφωνούμε την τιμή μαζί σας πριν ξεκινήσει το πιλοτικό."],
+    ],
+    finalTitle: "Θέλετε να το δείτε στο μαγαζί σας;",
+    finalBody: "Πείτε μας πού βρίσκεστε. Θα σας απαντήσουμε προσωπικά.",
+  },
+} as const;
+
+export default async function LandingPage({ searchParams }: Props) {
+  const lang: Lang = resolveLang((await searchParams).lang);
+  const c = t[lang];
+
   return (
-    <main className="relative min-h-screen overflow-hidden">
-      {/* ambient glows */}
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-40 left-1/2 h-[560px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,rgba(201,164,92,0.16),transparent)]" />
-        <div className="absolute bottom-0 right-0 h-[420px] w-[520px] rounded-full bg-[radial-gradient(closest-side,rgba(201,164,92,0.08),transparent)]" />
-      </div>
-
-      <nav className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-        <Link href="/" className="serif text-2xl font-semibold tracking-wide text-cream">
-          Ordavo<span className="text-gold">.</span>
-        </Link>
-        <div className="flex items-center gap-2 text-sm">
-          <Link href="/login" className="btn btn-ghost">Log in</Link>
-          <Link href="/signup" className="btn btn-gold">Start free</Link>
+    <PageShell lang={lang} path="/">
+      {/* Hero */}
+      <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-16 pt-6 sm:px-6 sm:pt-10 lg:grid-cols-[1.15fr_0.85fr] lg:gap-14 lg:pb-24">
+        <div className="motion-safe:animate-rise">
+          <h1 className="serif text-balance text-4xl font-semibold leading-[1.08] text-cream sm:text-6xl">
+            {HEADLINE[lang]}
+          </h1>
+          <p className="mt-5 max-w-xl text-base leading-relaxed text-fog sm:text-lg">{SUBLINE[lang]}</p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <Link href={langHref("/pilot", lang)} className={`btn btn-gold !px-6 !py-3 !text-sm ${focusRing}`}>
+              {c.ctaPilot}
+            </Link>
+            <Link href="/m/ambrosia?table=12" className={`btn btn-ghost !px-6 !py-3 !text-sm ${focusRing}`}>
+              {c.ctaDemo}
+            </Link>
+          </div>
         </div>
-      </nav>
-
-      <section className="relative z-10 mx-auto max-w-4xl px-6 pb-20 pt-16 text-center sm:pt-24">
-        <p className="animate-rise inline-flex items-center gap-2 rounded-full border border-gold/25 bg-gold/5 px-4 py-1.5 text-xs font-semibold tracking-wide text-gold-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-gold animate-pulse-gold" />
-          Built for cocktail bars & taverns
-        </p>
-        <h1 className="serif animate-rise mt-6 text-balance text-5xl font-semibold leading-[1.04] text-cream sm:text-7xl" style={{ animationDelay: "60ms" }}>
-          Every table
-          <br />
-          <span className="text-gold">orders itself.</span>
-        </h1>
-        <p className="animate-rise mx-auto mt-6 max-w-xl text-balance text-base leading-relaxed text-fog sm:text-lg" style={{ animationDelay: "120ms" }}>
-          Guests scan the QR on their table and order drinks from their phone.
-          Staff confirm, the bar pours, and you watch the evening add up in
-          real time — no apps, no hardware, no hassle.
-        </p>
-        <div className="animate-rise mt-9 flex flex-wrap items-center justify-center gap-3" style={{ animationDelay: "180ms" }}>
-          <Link href="/signup" className="btn btn-gold px-6 py-3 text-sm">
-            Create your venue — free
-          </Link>
-          <Link href="/m/ambrosia?table=12" className="btn btn-ghost px-6 py-3 text-sm">
-            Try the live guest demo →
-          </Link>
-        </div>
-        <p className="animate-rise mt-4 text-xs text-fog-2" style={{ animationDelay: "220ms" }}>
-          No credit card · Set up in 2 minutes · Demo PIN for staff screens: 1234
-        </p>
-      </section>
-
-      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-24">
-        <div className="glass grid gap-6 rounded-2xl p-6 sm:grid-cols-3 sm:p-8">
-          {steps.map((s) => (
-            <div key={s.n} className="animate-rise">
-              <span className="serif text-3xl font-semibold text-gold/60">{s.n}</span>
-              <h3 className="serif mt-3 text-xl font-semibold text-cream">{s.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-fog">{s.body}</p>
-            </div>
-          ))}
+        <div className="motion-safe:animate-rise" style={{ animationDelay: "120ms" }}>
+          <SiteReel label={c.reelLabel} hint={c.reelHint} />
         </div>
       </section>
 
-      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-24">
-        <h2 className="serif text-center text-3xl font-semibold text-cream sm:text-4xl">
-          Everything a modern bar needs<span className="text-gold">.</span>
+      {/* How it works */}
+      <section aria-labelledby="how" className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+        <h2 id="how" className="serif text-3xl font-semibold text-cream sm:text-4xl">
+          {STEPS[lang].heading}
         </h2>
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {features.map(([icon, title, body]) => (
-            <div key={title} className="card p-6 transition-transform duration-200 hover:-translate-y-1">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-gold/25 bg-gold/10 text-lg">
-                {icon}
-              </div>
-              <h3 className="mt-4 font-bold text-cream">{title}</h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-fog">{body}</p>
-            </div>
-          ))}
+        <div className="mt-6">
+          <StepsGrid lang={lang} />
         </div>
       </section>
 
-      <section className="relative z-10 mx-auto max-w-3xl px-6 pb-24 text-center">
-        <div className="glass rounded-2xl p-8 sm:p-10">
-          <h2 className="serif text-3xl font-semibold text-cream sm:text-4xl">
-            Open a demo right now
+      {/* What stays the same */}
+      <section aria-labelledby="stays" className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+        <div className="glass rounded-2xl p-6 sm:p-9">
+          <h2 id="stays" className="serif text-3xl font-semibold text-cream sm:text-4xl">
+            {STAYS[lang].heading}
           </h2>
-          <p className="mx-auto mt-3 max-w-md text-sm text-fog">
-            Everything below is live against a seeded demo venue, “ΑΜΒΡΟΣΙΑ — Cocktail Bar”.
-            Sign in with <span className="text-gold-2">demo@ambrosia.gr</span> ·{" "}
-            <span className="text-gold-2">demo1234</span>
-          </p>
-          <div className="mt-7 grid gap-3 text-left sm:grid-cols-2">
-            {[
-              { href: "/m/ambrosia?table=12", label: "Guest menu · Table 12", note: "What guests see on their phone" },
-              { href: "/bar/ambrosia", label: "Bar screen", note: "Queue, PIN 1234" },
-              { href: "/staff/ambrosia", label: "Staff screen", note: "Confirmations & calls, PIN 1234" },
-              { href: "/dashboard", label: "Owner dashboard", note: "Today's numbers & controls" },
-            ].map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="group rounded-xl border border-line bg-white/[0.02] p-4 transition-colors hover:border-gold/45 hover:bg-gold/5"
-              >
-                <span className="font-bold text-gold-2 group-hover:text-gold-3">{l.label} →</span>
-                <span className="mt-0.5 block text-xs text-fog">{l.note}</span>
-              </Link>
-            ))}
+          <div className="mt-6">
+            <StaysList lang={lang} />
           </div>
         </div>
       </section>
 
-      <footer className="relative z-10 border-t border-line px-6 py-10">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-xs text-fog-2 sm:flex-row">
-          <span className="serif text-lg text-fog">Ordavo<span className="text-gold">.</span></span>
-          <span>White-label QR table ordering · PostgreSQL · Next.js</span>
-          <span>© {new Date().getFullYear()} Ordavo</span>
+      {/* Built for */}
+      <section aria-labelledby="built" className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        <h2 id="built" className="text-xs font-bold uppercase tracking-[0.18em] text-fog">
+          {c.builtFor}
+        </h2>
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {c.venues.map((v) => (
+            <li key={v} className="rounded-full border border-line bg-white/[0.02] px-4 py-2 text-sm font-semibold text-cream">
+              {v}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Pilot offer */}
+      <section aria-labelledby="pilot" className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+        <div className="card relative overflow-hidden border-gold/30 p-6 shadow-glow sm:p-10">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-gold">{c.pilotKicker}</p>
+          <h2 id="pilot" className="serif mt-2 text-balance text-3xl font-semibold text-cream sm:text-5xl">
+            {c.pilotTitle}
+          </h2>
+          <p className="mt-4 max-w-2xl text-base leading-relaxed text-fog">{c.pilotBody}</p>
+          <p className="mt-6 text-sm font-semibold text-cream">{c.pilotMeasureTitle}</p>
+          <ul className="mt-2 grid gap-2 sm:grid-cols-3">
+            {MEASURE[lang].items.map((m) => (
+              <li key={m} className="flex gap-2 text-sm leading-snug text-fog">
+                <CheckIcon />
+                <span>{m}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-6 text-sm font-semibold text-gold-2">{c.pilotDecide}</p>
+          <div className="mt-6">
+            <Link href={langHref("/pilot", lang)} className={`btn btn-gold !px-6 !py-3 !text-sm ${focusRing}`}>
+              {c.ctaPilot}
+            </Link>
+          </div>
         </div>
-      </footer>
-    </main>
+      </section>
+
+      {/* FAQ */}
+      <section aria-labelledby="faq" className="mx-auto max-w-3xl px-4 py-12 sm:px-6">
+        <h2 id="faq" className="serif text-3xl font-semibold text-cream sm:text-4xl">
+          {c.faqTitle}
+        </h2>
+        <div className="mt-6 divide-y divide-line rounded-2xl border border-line bg-white/[0.02]">
+          {c.faq.map(([q, a]) => (
+            <details key={q} className="group px-5 py-4">
+              <summary
+                className={`flex cursor-pointer list-none items-center justify-between gap-4 rounded font-semibold text-cream [&::-webkit-details-marker]:hidden ${focusRing}`}
+              >
+                <span>{q}</span>
+                <span aria-hidden="true" className="text-xl leading-none text-gold transition-transform group-open:rotate-45">
+                  +
+                </span>
+              </summary>
+              <p className="mt-2 text-sm leading-relaxed text-fog">{a}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+
+      {/* Final CTA */}
+      <section aria-labelledby="final" className="mx-auto max-w-3xl px-4 pb-20 pt-8 text-center sm:px-6">
+        <h2 id="final" className="serif text-balance text-3xl font-semibold text-cream sm:text-4xl">
+          {c.finalTitle}
+        </h2>
+        <p className="mt-3 text-fog">{c.finalBody}</p>
+        <div className="mt-6">
+          <Link href={langHref("/pilot", lang)} className={`btn btn-gold !px-6 !py-3 !text-sm ${focusRing}`}>
+            {c.ctaPilot}
+          </Link>
+        </div>
+      </section>
+    </PageShell>
   );
 }
