@@ -6,6 +6,7 @@ import { settlePaidOrders } from "@/lib/core";
 import {
   credentialsComplete,
   findPaidTransactionByMerchantTrns,
+  normalizeClientId,
   retrieveOrderState,
   retrieveTransaction,
   type VivaCredentials,
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
 
   const creds = {
     env: (venue.viva_env === "live" ? "live" : "demo") as VivaEnv,
-    clientId: venue.viva_client_id,
+    clientId: normalizeClientId(venue.viva_client_id),
     clientSecret: venue.viva_client_secret,
     merchantId: venue.viva_merchant_id,
     sourceCode: venue.viva_source_code,

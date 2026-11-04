@@ -68,6 +68,17 @@ export function endpointsFor(env: VivaEnv): VivaEndpoints {
  * Build the Viva credential bundle from a venue row. Returns nulls for missing
  * pieces so callers can use credentialsComplete() to gate the feature.
  */
+/**
+ * Viva's Smart Checkout onboarding shows the client id with its tenant domain
+ * glued on — `12a4t5…4.apps.vivapayments.com`. The auth endpoint only accepts
+ * the bare id, so strip the domain wherever credentials enter the system.
+ */
+export function normalizeClientId(raw: string | null | undefined): string {
+  const id = (raw ?? "").trim();
+  const at = id.indexOf(".apps.vivapayments.com");
+  return at > 0 ? id.slice(0, at) : id;
+}
+
 export function vivaConfigFromVenue(v: {
   viva_env: string | null;
   viva_client_id: string | null;
@@ -77,7 +88,7 @@ export function vivaConfigFromVenue(v: {
 }): VivaCredentials {
   return {
     env: v.viva_env === "live" ? "live" : "demo",
-    clientId: v.viva_client_id ?? "",
+    clientId: normalizeClientId(v.viva_client_id),
     clientSecret: v.viva_client_secret ?? "",
     merchantId: v.viva_merchant_id ?? "",
     sourceCode: v.viva_source_code ?? "",
