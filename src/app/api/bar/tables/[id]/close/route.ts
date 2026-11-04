@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tables } from "@/db/schema";
 import { closeTableSession } from "@/lib/core";
-import { checkBarAccess } from "@/lib/pin";
+import { checkBarAccess, pinLockRemaining } from "@/lib/pin";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,16 @@ export async function POST(
   }
   const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "");
   if (!venue) {
+    const locked = pinLockRemaining((body.slug ?? "").trim());
+    if (locked > 0) {
+      return NextResponse.json(
+        {
+          error: `Too many wrong PINs. Try again in ${Math.ceil(locked / 60)} min.`,
+          retryAfter: locked,
+        },
+        { status: 429, headers: { "Retry-After": String(locked) } },
+      );
+    }
     return NextResponse.json({ error: "Invalid venue or PIN" }, { status: 401 });
   }
   const tbl = await db
