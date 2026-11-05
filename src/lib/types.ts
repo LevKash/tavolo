@@ -80,6 +80,9 @@ export interface OrderView {
 }
 
 export interface PendingOrderView {
+  /** True once a guest payment for this order was verified with Viva. */
+  paid?: boolean;
+  paidAt?: string | null;
   id: string;
   ref: string;
   tableId: string;
@@ -108,6 +111,8 @@ export interface OpenSessionView {
   tableLabel: string;
   openedAt: string;
   total: number;
+  /** Part of the table's open orders already paid by card (ring the receipt). */
+  paidTotal?: number;
   pendingCount: number;
 }
 

@@ -9,8 +9,11 @@ export interface VivaSettingsData {
   merchantId: string;
   sourceCode: string;
   hasSecret: boolean;
+  hasApiKey: boolean;
   enabled: boolean;
   webhookUrl: string;
+  successUrl: string;
+  failureUrl: string;
 }
 
 const label = "block text-[11px] uppercase tracking-[0.16em] text-fog-2 mb-1.5";
@@ -25,6 +28,8 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
   const [env, setEnv] = useState<"demo" | "live">(initial.env);
   const [enabled, setEnabled] = useState(initial.enabled);
   const [hasSecret, setHasSecret] = useState(initial.hasSecret);
+  const [apiKey, setApiKey] = useState("");
+  const [hasApiKey, setHasApiKey] = useState(initial.hasApiKey);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [saving, startSave] = useTransition();
   const [testing, startTest] = useTransition();
@@ -34,6 +39,7 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
       const res = await saveVivaSettingsAction({
         clientId,
         clientSecret,
+        apiKey,
         merchantId,
         sourceCode,
         env,
@@ -42,6 +48,8 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
       if (res.error) setMsg({ ok: false, text: res.error });
       else {
         setHasSecret(hasSecret || Boolean(clientSecret));
+        setHasApiKey(hasApiKey || Boolean(apiKey));
+        setApiKey("");
         setClientSecret("");
         setMsg({ ok: true, text: res.notice ?? "Saved." });
       }
@@ -181,12 +189,44 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
             </div>
           </div>
 
+          <div>
+            <label className={label} htmlFor="viva-api-key">
+              API Key
+            </label>
+            <input
+              id="viva-api-key"
+              className={field}
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={hasApiKey ? "•••••••• saved — leave blank to keep" : "Paste the API key"}
+              autoComplete="new-password"
+            />
+            <p className="mt-1 text-[11px] leading-relaxed text-fog-2">
+              Required for card payments. It lets Viva verify the webhook URL below and lets
+              Ordavo double-check payments that were not confirmed. Found in Viva under Settings → API Access.
+            </p>
+          </div>
+
           <div className="rounded-lg border border-line bg-ink/40 px-3 py-2.5">
             <p className="text-[11px] uppercase tracking-[0.16em] text-fog-2">Webhook URL</p>
             <p className="mt-1 break-all font-mono text-xs text-cream">{initial.webhookUrl}</p>
             <p className="mt-1.5 text-[11px] leading-relaxed text-fog">
-              Paste this in your Viva app so paid orders close tables automatically. Without it
-              the table still closes when the guest returns to the menu.
+              Add this in Viva under Settings → API Access → Webhooks, event “Transaction Payment
+              Created”. Paid orders then show a PAID badge on the bar screen so staff can ring the
+              receipt. Paying does not close the table.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink/40 px-3 py-2.5">
+            <p className="text-[11px] uppercase tracking-[0.16em] text-fog-2">
+              Return URLs (payment source)
+            </p>
+            <p className="mt-1 break-all font-mono text-xs text-cream">Success: {initial.successUrl}</p>
+            <p className="mt-1 break-all font-mono text-xs text-cream">Failure: {initial.failureUrl}</p>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-fog">
+              Set these in your Viva payment source (Sales → Online Payments → Websites/Apps) so
+              guests come back to Ordavo after paying.
             </p>
           </div>
         </div>

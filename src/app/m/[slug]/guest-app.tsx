@@ -1298,7 +1298,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                       </div>
                       <p className="mt-0.5 text-[10px] uppercase tracking-wide text-fog">
                         {o.createdAt.slice(11, 16)} ·{" "}
-                        {o.status === "paid"
+                        {o.paymentStatus === "paid"
                           ? lang === "el"
                             ? "πληρωμένο"
                             : "paid"

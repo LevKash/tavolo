@@ -220,6 +220,7 @@ export default function BarApp(props: {
                     source={o.source}
                     note={o.note}
                     total={o.total}
+                    paid={Boolean(o.paid)}
                     createdAt={o.createdAt}
                     now={now}
                     lines={o.lines}
@@ -266,7 +267,14 @@ export default function BarApp(props: {
                         )}
                       </p>
                     </div>
-                    <span className="font-extrabold text-gold-2">{money(s.total)}</span>
+                    <span className="text-right">
+                      <span className="font-extrabold text-gold-2">{money(s.total)}</span>
+                      {(s.paidTotal ?? 0) > 0 && (
+                        <span className="block text-[11px] font-bold text-good">
+                          {money(s.paidTotal ?? 0)} paid by card
+                        </span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -299,13 +307,14 @@ function QueueCard(props: {
   source: "menu" | "wheel";
   note: string;
   total: number;
+  paid: boolean;
   createdAt: string;
   now: number;
   lines: { name: string; qty: number; price: number }[];
   fresh: boolean;
   onAction: (next: "making" | "served" | "closed") => void;
 }) {
-  const { tableLabel, status, source, note, total, createdAt, now, lines, fresh, onAction } = props;
+  const { tableLabel, status, source, note, total, paid, createdAt, now, lines, fresh, onAction } = props;
   return (
     <div
       className={cn(
@@ -331,6 +340,11 @@ function QueueCard(props: {
           {source === "wheel" && (
             <span className="rounded border border-gold/35 bg-gold/10 px-1.5 py-0.5 text-[10px] font-bold text-gold-2">
               🎡 wheel
+            </span>
+          )}
+          {paid && (
+            <span className="rounded-full bg-good/20 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-good">
+              Paid by card · ring the receipt
             </span>
           )}
         </div>

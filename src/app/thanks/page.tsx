@@ -1,221 +1,114 @@
 import Link from "next/link";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { tableSessions, tables, venues } from "@/db/schema";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { payments, tables, venues } from "@/db/schema";
+import { UUID_RE } from "@/lib/rate-limit";
 
 /**
- * Post-payment confirmation page.
- *
- * The guest comes here from `/r` after Viva sends them back. Purpose: one clear
- * confirmation, one obvious action — return to the menu and keep ordering.
- *
- * Deliberately no JS: the guest is on an unfamiliar device right after typing
- * card details, so this page must render even on a flaky connection, and the
- * link must work even if hydration never happens.
- *
- * The table id is re-resolved here rather than trusted from the query string.
- * A payment source configured with a bare `venue` (or with literal
- * `{TransactionId}` placeholders) still redirects here, and without this
- * fallback the "back to my menu" button degraded to `/m/<slug>` — a menu with
- * no table attached, where the guest cannot order or pay. `s_code` is the
- * payment order code we created for that table, so it is the reliable key.
+ * Post-payment page. It shows what OUR records say about the payment (verified
+ * with Viva by /r or the webhook), never just that the guest was redirected.
+ * No JavaScript: while the payment is still being confirmed the page refreshes
+ * itself a few times, so it works on a flaky connection too.
  */
 export const dynamic = "force-dynamic";
 
-type Search = {
-  venue?: string;
-  table?: string;
-  label?: string;
-  amount?: string;
-  status?: string;
-  t?: string;
-  s_code?: string;
-};
+type Search = { p?: string; status?: string; n?: string };
 
-async function resolveTable(sp: Search) {
-  if (sp.table) {
-    // `/r` passes `label`, but a hand-written or third-party return URL may only
-    // carry the table id. Without a label the page degrades to a bare amount and
-    // the guest cannot tell which table was paid, so look the number up.
-    let label = sp.label ?? "";
-    if (!label) {
-      try {
-        const rows = await db
-          .select({ label: tables.label })
-          .from(tables)
-          .where(eq(tables.id, sp.table))
-          .limit(1);
-        label = rows[0]?.label ?? "";
-      } catch {
-        label = "";
-      }
-    }
-    return { tableId: sp.table, label, amount: sp.amount };
-  }
+const MAX_REFRESHES = 8;
 
-  // Viva does NOT echo our order code back on redirect: it mints a fresh
-  // `orderCode` for the checkout, so `s` almost never matches
-  // `table_sessions.payment_order_code`. The stable join key is our own session
-  // id, which we embed in `merchantTrns` as `ordavo:<sessionId>:<nonce>`.
-  const candidates: string[] = [];
-
-  const code = sp.s_code ?? "";
-  if (code) candidates.push(code);
-
-  for (const key of candidates) {
-    try {
-      const rows = await db
+export default async function Thanks({ searchParams }: { searchParams: Promise<Search> }) {
+  const sp = await searchParams;
+  const pid = sp.p && UUID_RE.test(sp.p) ? sp.p : "";
+  const rows = pid
+    ? await db
         .select({
-          tableId: tableSessions.table_id,
+          status: payments.status,
+          cents: payments.amount_cents,
+          tableId: payments.table_id,
           label: tables.label,
-          amount: tableSessions.payment_amount,
           slug: venues.slug,
         })
-        .from(tableSessions)
-        .innerJoin(tables, eq(tables.id, tableSessions.table_id))
-        .innerJoin(venues, eq(venues.id, tables.venue_id))
-        .where(eq(tableSessions.payment_order_code, key))
-        .limit(1);
+        .from(payments)
+        .innerJoin(venues, eq(venues.id, payments.venue_id))
+        .leftJoin(tables, eq(tables.id, payments.table_id))
+        .where(eq(payments.id, pid))
+        .limit(1)
+    : [];
+  const pay = rows[0];
 
-      if (rows.length) {
-        const r = rows[0];
-        return {
-          tableId: r.tableId,
-          label: r.label ?? "",
-          amount: r.amount != null ? String(r.amount) : undefined,
-          venue: r.slug,
-        };
-      }
-    } catch {
-      /* fall through to the next strategy */
-    }
-  }
+  const cancelled = sp.status === "failed";
+  const paid = pay?.status === "paid";
+  const confirming = Boolean(pay) && !paid && !cancelled && pay?.status === "pending";
+  const n = Math.max(0, Math.min(MAX_REFRESHES, Number(sp.n ?? 0) || 0));
+  const refresh = confirming && n < MAX_REFRESHES;
 
-  // Last resort: the newest session we created a payment for in the last day.
-  // Better a correct table than a dead end — `/r` only lands here right after a
-  // checkout, so "most recent payment" is the guest standing at that table.
-  try {
-    const rows = await db
-      .select({
-        tableId: tableSessions.table_id,
-        label: tables.label,
-        amount: tableSessions.payment_amount,
-        slug: venues.slug,
-      })
-      .from(tableSessions)
-      .innerJoin(tables, eq(tables.id, tableSessions.table_id))
-      .innerJoin(venues, eq(venues.id, tables.venue_id))
-      .where(
-        and(
-          eq(venues.slug, sp.venue ?? ""),
-          isNotNull(tableSessions.payment_created_at),
-        ),
-      )
-      .orderBy(desc(tableSessions.payment_created_at))
-      .limit(1);
-
-    if (rows.length) {
-      const r = rows[0];
-      return {
-        tableId: r.tableId,
-        label: r.label ?? "",
-        amount: r.amount != null ? String(r.amount) : undefined,
-        venue: r.slug,
-      };
-    }
-  } catch {
-    /* give up below */
-  }
-
-  return null;
-}
-
-export default async function Thanks({
-  searchParams,
-}: {
-  searchParams: Promise<Search>;
-}) {
-  const sp = await searchParams;
-  const failed = sp.status === "failed";
-  const resolved = await resolveTable(sp);
-
-  const tableId = resolved?.tableId ?? "";
-  const venue = resolved?.venue ?? sp.venue ?? "";
-  const amountRaw = resolved?.amount ?? sp.amount;
-  const amount = amountRaw ? Number(amountRaw) : null;
-  const label = resolved?.label || (sp.label ?? "");
-
-  const back = new URLSearchParams();
-  if (tableId) back.set("table", tableId);
-  const backHref = `/m/${venue}${back.toString() ? `?${back}` : ""}`;
+  const back = pay ? `/m/${pay.slug}?table=${pay.tableId}` : "";
+  const tone = paid ? "good" : confirming ? "wait" : "warn";
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-6 px-6 py-10 text-center">
+      {refresh && <meta httpEquiv="refresh" content={`4;url=/thanks?p=${pid}&n=${n + 1}`} />}
       <div
         className={`flex h-20 w-20 items-center justify-center rounded-full border text-4xl ${
-          failed
-            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-            : "border-good/40 bg-good/10 text-good"
+          tone === "good"
+            ? "border-good/40 bg-good/10 text-good"
+            : "border-amber-400/40 bg-amber-400/10 text-amber-300"
         }`}
         aria-hidden="true"
       >
-        {failed ? "!" : "✓"}
+        {tone === "good" ? "✓" : tone === "wait" ? "…" : "!"}
       </div>
 
       <div className="space-y-2">
         <h1 className="font-[family-name:var(--font-serif)] text-3xl font-semibold tracking-tight">
-          {failed ? "Payment not completed" : "Thank you for your payment"}
+          {paid
+            ? "Thank you for your payment"
+            : confirming
+              ? "Confirming your payment…"
+              : "Payment not confirmed"}
         </h1>
         <p className="text-sm opacity-70">
-          {failed
-            ? "No money has been taken. You can try paying again."
-            : "Your payment was received."}
+          {paid
+            ? "Your payment was received. Ask the staff for your receipt."
+            : confirming
+              ? "This usually takes a few seconds. Please keep this page open."
+              : "We could not confirm a payment. If your card was charged, show this screen to the staff. Otherwise you can try again."}
         </p>
         <p className="text-xs opacity-50">
-          {failed
-            ? "Δεν πραγματοποιήθηκε χρέωση. Μπορείτε να δοκιμάσετε ξανά."
-            : "Η πληρωμή σας ελήφθη. Ευχαριστούμε!"}
+          {paid
+            ? "Η πληρωμή σας ελήφθη. Ζητήστε την απόδειξη από το προσωπικό."
+            : confirming
+              ? "Επιβεβαιώνουμε την πληρωμή σας. Κρατήστε τη σελίδα ανοιχτή."
+              : "Δεν επιβεβαιώθηκε πληρωμή. Αν η κάρτα χρεώθηκε, δείξτε αυτή την οθόνη στο προσωπικό."}
         </p>
+        {confirming && !refresh && (
+          <p className="text-sm opacity-80">
+            Still waiting? Show this screen to the staff, they can check it.
+          </p>
+        )}
       </div>
 
-      {(amount || label) && (
+      {pay && (
         <div className="w-full rounded-2xl border border-white/10 bg-white/5 px-5 py-4">
-          {label && (
-            <div className="text-xs uppercase tracking-widest opacity-50">
-              Table {label}
-            </div>
+          {pay.label && (
+            <div className="text-xs uppercase tracking-widest opacity-50">Table {pay.label}</div>
           )}
-          {amount != null && !Number.isNaN(amount) && (
-            <div className="mt-1 text-2xl font-semibold text-white">
-              €{amount.toFixed(2)}
-            </div>
-          )}
+          <div className="mt-1 text-2xl font-semibold text-white">
+            €{(pay.cents / 100).toFixed(2)}
+          </div>
         </div>
       )}
 
-      {venue && tableId ? (
+      {back ? (
         <Link
-          href={backHref}
+          href={back}
           className="w-full rounded-2xl bg-[color:var(--color-gold)] px-6 py-4 text-base font-semibold text-black transition-opacity hover:opacity-90"
         >
-          {failed ? "Try again" : "Go back to my menu"}
+          {paid ? "Back to my menu" : "Try again"}
         </Link>
       ) : (
-        <p className="text-sm opacity-70">
-          Please show this screen to the staff.
-        </p>
-      )}
-
-      {venue && tableId && (
-        <p className="text-xs opacity-40">
-          {failed ? "Πίσω στο μενού" : "Επιστροφή στο μενού"}
-        </p>
-      )}
-
-      {!tableId && (
-        <p className="max-w-xs text-xs opacity-40">
-          Couldn&apos;t find your table. Scan the QR code on your table to keep
-          ordering.
+        <p className="max-w-xs text-xs opacity-60">
+          Scan the QR code on your table to go back to the menu.
         </p>
       )}
     </main>

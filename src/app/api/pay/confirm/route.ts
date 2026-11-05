@@ -1,253 +1,74 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { orders, tableSessions, venues } from "@/db/schema";
-import { settlePaidOrders } from "@/lib/core";
-import {
-  credentialsComplete,
-  findPaidTransactionByMerchantTrns,
-  retrieveOrderState,
-  retrieveTransaction,
-  type VivaCredentials,
-  type VivaEnv,
-} from "@/lib/viva";
+import { payments } from "@/db/schema";
+import { getVenueBySlug } from "@/lib/core";
+import { confirmTransaction, reconcileVenue, vivaCreds } from "@/lib/payments";
+import { clientIp, rateLimited, UUID_RE } from "@/lib/rate-limit";
+import { credentialsComplete } from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Server-side payment confirmation, independent of the webhook.
+ * Lets a returning guest's screen ask "was my payment recorded?".
  *
- * Viva's webhook is the primary notification channel, but it is not something we
- * control: on a cold Vercel function, a misregistered hook, or a merchant-level
- * outage the POST simply never arrives, and the guest is left having paid while
- * the bill still shows as unpaid. This endpoint closes that gap by asking Viva
- * directly.
- *
- * It is safe to call repeatedly: the transaction status comes from Viva, never
- * from the caller, so a guest cannot mark a bill paid by hitting this URL. The
- * worst a spammer achieves is re-reading a transaction they already paid for.
- *
- * Two ways to identify what to confirm, in order of trust:
- *   - `transactionId`: the `t=` value Viva appends to the success URL. Exact.
- *   - `tableId` + `slug`: what we have when the guest comes back to the menu.
- *     We look up the stored payment order code and re-read that transaction.
+ * Whatever the caller sends, the answer comes from Viva: a transaction id is
+ * re-read from Viva with the venue's own credentials and matched to a payment by
+ * the reference WE created, so a guest cannot mark a bill paid by calling this.
+ * Without a transaction id it only reports what we already know (and nudges the
+ * reconciliation that asks Viva about pending checkouts).
  */
 export async function POST(req: NextRequest) {
-  let body: Record<string, unknown> = {};
+  let body: { slug?: unknown; tableId?: unknown; transactionId?: unknown };
   try {
-    body = (await req.json()) as Record<string, unknown>;
+    body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: "bad_json" }, { status: 400 });
   }
-
-  const str = (k: string) => {
-    const v = body[k];
-    return v === undefined || v === null ? "" : String(v).trim();
-  };
-
-  const slug = str("slug");
-  const tableId = str("tableId");
-  const transactionId = str("transactionId");
-
+  const slug = typeof body.slug === "string" ? body.slug.trim() : "";
+  const tableId = typeof body.tableId === "string" ? body.tableId.trim() : "";
+  const transactionId = typeof body.transactionId === "string" ? body.transactionId.trim() : "";
   if (!slug) return NextResponse.json({ ok: false, error: "missing_slug" }, { status: 400 });
-  if (!transactionId && !tableId) {
+  if (!transactionId && !UUID_RE.test(tableId)) {
     return NextResponse.json({ ok: false, error: "missing_target" }, { status: 400 });
   }
-
-  const venueRows = await db
-    .select()
-    .from(venues)
-    .where(eq(venues.slug, slug))
-    .limit(1);
-  if (venueRows.length === 0) {
-    return NextResponse.json({ ok: false, error: "unknown_venue" }, { status: 404 });
+  if (rateLimited(`pay-confirm:${clientIp(req)}`, 30, 60_000)) {
+    return NextResponse.json({ ok: false, error: "too_many_requests" }, { status: 429 });
   }
-  const venue = venueRows[0];
 
-  const creds = {
-    env: (venue.viva_env === "live" ? "live" : "demo") as VivaEnv,
-    clientId: venue.viva_client_id,
-    clientSecret: venue.viva_client_secret,
-    merchantId: venue.viva_merchant_id,
-    sourceCode: venue.viva_source_code,
-    apiKey: venue.viva_api_key ?? "",
-  } as VivaCredentials;
-  if (!credentialsComplete(creds)) {
+  const venue = await getVenueBySlug(slug);
+  if (!venue) return NextResponse.json({ ok: false, error: "unknown_venue" }, { status: 404 });
+  if (!credentialsComplete(vivaCreds(venue))) {
     return NextResponse.json({ ok: false, error: "no_credentials" }, { status: 400 });
   }
 
-  // Find the session we are confirming. A known transaction id is exact; a table
-  // is a hint and must still resolve to a session that actually has a payment
-  // order attached, otherwise there is nothing to verify against.
-  const session = await (async () => {
-    if (transactionId) {
-      const exact = await db
-        .select()
-        .from(tableSessions)
-        .where(
-          and(
-            eq(tableSessions.venue_id, venue.id),
-            eq(tableSessions.payment_transaction_id, transactionId),
-          ),
-        )
-        .limit(1);
-      if (exact.length > 0) return exact[0];
+  if (transactionId) {
+    if (!/^[0-9a-f-]{8,64}$/i.test(transactionId)) {
+      return NextResponse.json({ ok: false, error: "bad_transaction_id" }, { status: 400 });
     }
-
-    if (!tableId) return null;
-
-    const rows = await db
-      .select()
-      .from(tableSessions)
-      .where(and(eq(tableSessions.venue_id, venue.id), eq(tableSessions.table_id, tableId)))
-      .orderBy(tableSessions.opened_at);
-    const pending = rows.filter((s) => s.payment_order_code && s.payment_status !== "paid");
-    return pending.length > 0 ? pending[pending.length - 1] : null;
-  })();
-
-  if (!session) {
-    return NextResponse.json({ ok: false, error: "no_session" }, { status: 404 });
-  }
-
-  if (session.payment_status === "paid") {
-    return NextResponse.json({ ok: true, paid: true, amount: Number(session.payment_amount ?? 0), already: true });
-  }
-
-  // Ask Viva. `transactionId` from the success URL is authoritative. The stored
-  // one is only a fallback for a webhook-driven confirm, and even then only when
-  // it still belongs to the CURRENT payment order — otherwise a stale id from an
-  // earlier payment resolves to an earlier order code and 409s the guest for
-  // good.
-  let txId = transactionId || session.payment_transaction_id || "";
-
-  if (!txId) {
-    // No transaction id yet — normal when the guest lands back from Viva and the
-    // return URL only carried the order code. Viva mints a NEW order code every
-    // time checkout opens, so the code on the session is often NOT the one that
-    // was paid, and the order JSON carries no transaction list. The only stable
-    // key is `merchantTrns`, which we generate ourselves and which every
-    // transaction echoes back. Look the payment up by that instead.
-    const mtrns = session.payment_merchant_trns;
-    let paidTx: Awaited<ReturnType<typeof findPaidTransactionByMerchantTrns>> | null = null;
-
-    if (mtrns) {
-      paidTx = await findPaidTransactionByMerchantTrns(
-        creds,
-        mtrns,
-        session.payment_created_at ?? session.opened_at ?? new Date(),
-      ).catch(() => null);
+    try {
+      const r = await confirmTransaction(venue, transactionId, "confirm");
+      return NextResponse.json({
+        ok: true,
+        paid: r.outcome === "paid" || r.outcome === "already",
+        outcome: r.outcome,
+      });
+    } catch (err) {
+      console.error("[pay/confirm] verify failed:", (err as Error).message);
+      return NextResponse.json({ ok: false, error: "viva_error" }, { status: 502 });
     }
-
-    if (!paidTx) {
-      const orderState = session.payment_order_code
-        ? await retrieveOrderState(creds, session.payment_order_code).catch(() => null)
-        : null;
-      return NextResponse.json(
-        {
-          ok: true,
-          paid: false,
-          statusId: orderState?.stateId ?? "",
-          hint: orderState ? undefined : "transaction id required on first confirmation",
-        },
-        { status: orderState ? 200 : 409 },
-      );
-    }
-
-    // Money is confirmed. Settle the session and every order it covers.
-    const now = new Date();
-    await db
-      .update(tableSessions)
-      .set({
-        payment_status: "paid",
-        payment_transaction_id: paidTx.transactionId,
-        paid_at: now,
-      })
-      .where(eq(tableSessions.id, session.id));
-
-    const covered = await db
-      .select({ id: orders.id })
-      .from(orders)
-      .where(
-        and(
-          eq(orders.session_id, session.id),
-          inArray(orders.status, ["pending_confirm", "new", "making", "served"]),
-        ),
-      );
-    const settled = await settlePaidOrders(
-      venue.id,
-      covered.map((o) => o.id),
-    );
-
-    console.log(
-      `[pay/confirm] session=${session.id} paid via=merchantTrns tx=${paidTx.transactionId} amount=${paidTx.amount} settled=${settled}`,
-    );
-
-    return NextResponse.json({
-      ok: true,
-      paid: true,
-      amount: paidTx.amount || Number(session.payment_amount ?? 0),
-      settled,
-    });
   }
 
-  let tx;
-  try {
-    tx = await retrieveTransaction(creds, txId);
-  } catch (err) {
-    console.error("[pay/confirm] retrieve failed:", (err as Error).message);
-    return NextResponse.json({ ok: false, error: "viva_error" }, { status: 502 });
-  }
-
-  if (!tx.paid) {
-    await db
-      .update(tableSessions)
-      .set({ payment_status: "pending", payment_transaction_id: txId })
-      .where(eq(tableSessions.id, session.id));
-    return NextResponse.json({ ok: true, paid: false, statusId: tx.statusId });
-  }
-
-  // A paid transaction that belongs to a DIFFERENT payment order must not settle
-  // this session. Without this check a guest who paid twice (or a transaction
-  // reused from an earlier checkout) could zero out a bill it never covered.
-  if (
-    session.payment_order_code &&
-    tx.orderCode &&
-    String(tx.orderCode) !== String(session.payment_order_code)
-  ) {
-    console.warn(
-      `[pay/confirm] order mismatch session=${session.id} stored=${session.payment_order_code} tx=${tx.orderCode}`,
-    );
-    return NextResponse.json(
-      { ok: false, error: "order_mismatch", paid: false },
-      { status: 409 },
-    );
-  }
-
-  const now = new Date();
-  await db
-    .update(tableSessions)
-    .set({ payment_status: "paid", payment_transaction_id: txId, paid_at: now })
-    .where(eq(tableSessions.id, session.id));
-
-  // Stamp every order this payment covered, exactly like the webhook does, so a
-  // confirmed payment cannot be billed twice.
-  const covered = await db
-    .select({ id: orders.id })
-    .from(orders)
-    .where(
-      and(
-        eq(orders.session_id, session.id),
-        inArray(orders.status, ["pending_confirm", "new", "making", "served"]),
-      ),
-    );
-  const settled = await settlePaidOrders(
-    venue.id,
-    covered.map((o) => o.id),
-  );
-
-  console.log(
-    `[pay/confirm] session=${session.id} tx=${txId} paid=${tx.amount}€ settled=${settled} via=${transactionId ? "return" : "table"}`,
-  );
-
-  return NextResponse.json({ ok: true, paid: true, amount: Number(session.payment_amount ?? 0), settled });
+  await reconcileVenue(venue).catch(() => undefined);
+  const [latest] = await db
+    .select({ status: payments.status })
+    .from(payments)
+    .where(and(eq(payments.venue_id, venue.id), eq(payments.table_id, tableId)))
+    .orderBy(desc(payments.created_at))
+    .limit(1);
+  return NextResponse.json({
+    ok: true,
+    paid: latest?.status === "paid",
+    pending: latest?.status === "pending",
+  });
 }

@@ -90,11 +90,20 @@ export const venues = pgTable(
   // Legacy API key (Basic auth). Only used to mint the webhook verification key.
   // NEVER select this column into public/guest payloads.
   viva_api_key: text("viva_api_key").notNull().default(""),
+  // Secret path segment of this venue's own Viva webhook URL
+  // (/api/webhooks/viva/<token>), so each venue's events are tied to it and its
+  // webhook verification uses its own Viva account.
+  webhook_token: text("webhook_token")
+    .notNull()
+    .default(sql`replace(gen_random_uuid()::text, '-', '')`),
   created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
     .notNull()
     .defaultNow(),
   },
-  (t) => [uniqueIndex("venues_slug_uq").on(t.slug)],
+  (t) => [
+    uniqueIndex("venues_slug_uq").on(t.slug),
+    uniqueIndex("venues_webhook_token_uq").on(t.webhook_token),
+  ],
 );
 
 /** Physical tables (each has its own QR). */
@@ -233,6 +242,9 @@ export const orders = pgTable(
     // and the bill can subtract exactly what was settled.
     payment_status: text("payment_status").notNull().default("unpaid"),
     paid_amount: numeric("paid_amount", { precision: 10, scale: 2, mode: "number" }),
+    // The payment that settled this order, and when.
+    payment_id: uuid("payment_id"),
+    paid_at: timestamp("paid_at", { withTimezone: true, mode: "date" }),
     total: numeric("total", { precision: 10, scale: 2, mode: "number" })
       .notNull()
       .default(0),
@@ -362,6 +374,81 @@ export type TableSession = typeof tableSessions.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type MenuItem = typeof menuItems.$inferSelect;
 export type Order = typeof orders.$inferSelect;
+export type Payment = typeof payments.$inferSelect;
 export type OrderLine = typeof orderLines.$inferSelect;
 export type WaiterCall = typeof waiterCalls.$inferSelect;
 export type CocktailPassport = typeof cocktailPassports.$inferSelect;
+
+/**
+ * One row per payment ATTEMPT at a venue's Viva account. Never overwritten: a
+ * second tap on Pay creates a second row, so an old checkout that is paid late is
+ * still recognised. `merchant_trns` (`ordavo:<id>`) is our own reference; Viva
+ * echoes it on the transaction, so it is the key that ties money to a row.
+ */
+export const payments = pgTable(
+  "payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    venue_id: uuid("venue_id")
+      .notNull()
+      .references(() => venues.id),
+    // Plain ids (no FK cascade): deleting a table must not erase payment history.
+    table_id: uuid("table_id").notNull(),
+    merchant_trns: text("merchant_trns").notNull(),
+    order_code: text("order_code").notNull().default(""),
+    amount_cents: integer("amount_cents").notNull(),
+    // pending | paid | failed | expired
+    status: text("status").notNull().default("pending"),
+    transaction_id: text("transaction_id").notNull().default(""),
+    // Something a human should look at (overlap, amount mismatch, reused tx...).
+    needs_attention: boolean("needs_attention").notNull().default(false),
+    note: text("note").notNull().default(""),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    paid_at: timestamp("paid_at", { withTimezone: true, mode: "date" }),
+    last_checked_at: timestamp("last_checked_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    uniqueIndex("payments_merchant_trns_uq").on(t.merchant_trns),
+    uniqueIndex("payments_transaction_uq")
+      .on(t.transaction_id)
+      .where(sql`${t.transaction_id} <> ''`),
+    index("payments_venue_status_idx").on(t.venue_id, t.status),
+    index("payments_table_idx").on(t.table_id, t.status),
+  ],
+);
+
+/** The orders a payment covers, frozen when the payment was created. */
+export const paymentOrders = pgTable(
+  "payment_orders",
+  {
+    payment_id: uuid("payment_id")
+      .notNull()
+      .references(() => payments.id, { onDelete: "cascade" }),
+    order_id: uuid("order_id").notNull(),
+    amount_cents: integer("amount_cents").notNull(),
+  },
+  (t) => [
+    uniqueIndex("payment_orders_uq").on(t.payment_id, t.order_id),
+    index("payment_orders_order_idx").on(t.order_id),
+  ],
+);
+
+/** Every payment notification we receive, matched or not (audit trail). */
+export const paymentEvents = pgTable(
+  "payment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    received_at: timestamp("received_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    source: text("source").notNull(), // webhook | return | confirm | reconcile
+    venue_id: uuid("venue_id"),
+    payment_id: uuid("payment_id"),
+    transaction_id: text("transaction_id").notNull().default(""),
+    outcome: text("outcome").notNull(), // paid | already | foreign | unmatched | rejected | error | ...
+    detail: text("detail").notNull().default(""),
+  },
+  (t) => [index("payment_events_received_idx").on(t.received_at)],
+);

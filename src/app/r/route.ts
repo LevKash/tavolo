@@ -1,97 +1,69 @@
 import { NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { tableSessions, venues, tables } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { payments, venues } from "@/db/schema";
+import { confirmTransaction } from "@/lib/payments";
+import { clientIp, rateLimited } from "@/lib/rate-limit";
 
 /**
- * Guest return URL for Viva Smart Checkout.
+ * Guest return URL for Viva Smart Checkout (set in the venue's Viva payment
+ * source, one fixed pair per source):
  *
- * Viva ignores `successUrl` / `failureUrl` sent in the Create Payment Order
- * body — the return address lives in the merchant's **payment source**
- * (Sales → Online Payments → Websites/Apps), one fixed pair per source.
+ *   success → https://<site>/r?venue=<slug>&s={OrderCode}&t={TransactionId}
+ *   failure → https://<site>/r?venue=<slug>&s={OrderCode}&t={TransactionId}&fail=1
  *
- * Our real return URL is per-table and per-session (`/m/<slug>?table=<uuid>`),
- * which changes constantly and cannot be configured statically. So the payment
- * source points here, and we resolve the guest's table from the one thing Viva
- * always gives back: `s` = the payment order code we created.
- *
- *   success → https://ordavo.vercel.app/r?venue=ambrosia&s={OrderCode}&t={TransactionId}
- *   failure → https://ordavo.vercel.app/r?venue=ambrosia&s={OrderCode}&t={TransactionId}&fail=1
- *
- * The guest lands on a dedicated confirmation page (`/thanks`), not straight
- * back into the menu: dropping them back into the menu left them on a screen
- * that still showed the old bill and no obvious way to keep ordering.
+ * The redirect is only a hint. On success we ask Viva about the transaction id
+ * right here, on the server, so the payment is recorded even if the guest's
+ * browser never runs any JavaScript and the webhook is late. The guest then
+ * lands on /thanks, which shows what our own records say.
  */
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const qs = url.searchParams;
-
   const s = qs.get("s") ?? qs.get("orderCode") ?? "";
   const t = qs.get("t") ?? qs.get("transactionId") ?? "";
+  const slug = qs.get("venue") ?? "";
   const fail = qs.has("fail") || qs.has("failure");
 
-  // Viva's callback sometimes arrives without our own `venue` param (the
-  // payment source URL is shared per venue, so we pass it there). Fall back to
-  // resolving the venue from the payment order code.
-  let slug = qs.get("venue") ?? "";
-
-  const origin = url.origin;
+  if (rateLimited(`return:${clientIp(req)}`, 30, 60_000)) {
+    return NextResponse.redirect(new URL("/r/unknown", url.origin), 303);
+  }
 
   try {
-    if (s) {
-      const rows = await db
-        .select({
-          sessionId: tableSessions.id,
-          tableId: tableSessions.table_id,
-          venueSlug: venues.slug,
-          tableLabel: tables.label,
-          amount: tableSessions.payment_amount,
-        })
-        .from(tableSessions)
-        .innerJoin(tables, eq(tables.id, tableSessions.table_id))
-        .innerJoin(venues, eq(venues.id, tables.venue_id))
-        .where(eq(tableSessions.payment_order_code, s))
-        .limit(1);
-
-      if (rows.length) {
-        const r = rows[0];
-        const target = new URL(`${origin}/thanks`, origin);
-        target.searchParams.set("venue", r.venueSlug);
-        target.searchParams.set("table", r.tableId);
-        if (r.tableLabel) target.searchParams.set("label", r.tableLabel);
-        if (r.amount != null) target.searchParams.set("amount", String(r.amount));
-        if (fail) target.searchParams.set("status", "failed");
-        else target.searchParams.set("status", "paid");
-        if (t) target.searchParams.set("t", t);
-        if (s) target.searchParams.set("s_code", s);
-        return NextResponse.redirect(target, 303);
-      }
-
-      if (!slug) {
-        // Unknown order — the payment source may be shared across venues, so we
-        // cannot guess the bar. Send the guest to a neutral page rather than a
-        // broken menu.
-        return NextResponse.redirect(new URL("/r/unknown", origin), 303);
+    if (slug && (s || t)) {
+      const [venue] = await db.select().from(venues).where(eq(venues.slug, slug)).limit(1);
+      if (venue) {
+        let paymentId = "";
+        // Ask Viva about the transaction whatever the redirect claims: a failure
+        // redirect can still hide a payment that went through.
+        if (/^[0-9a-f-]{8,64}$/i.test(t)) {
+          try {
+            const r = await confirmTransaction(venue, t, "return");
+            paymentId = r.paymentId ?? "";
+          } catch (err) {
+            console.error("[r] verify failed:", (err as Error).message);
+          }
+        }
+        if (!paymentId && /^\d{6,20}$/.test(s)) {
+          const [p] = await db
+            .select({ id: payments.id })
+            .from(payments)
+            .where(and(eq(payments.venue_id, venue.id), eq(payments.order_code, s)))
+            .limit(1);
+          paymentId = p?.id ?? "";
+        }
+        if (paymentId) {
+          const target = new URL("/thanks", url.origin);
+          target.searchParams.set("p", paymentId);
+          if (fail) target.searchParams.set("status", "failed");
+          return NextResponse.redirect(target, 303);
+        }
       }
     }
-  } catch {
-    // fall through to the slug-based redirect below
+  } catch (err) {
+    console.error("[r] error:", (err as Error).message);
   }
-
-  if (slug) {
-    const target = new URL(`${origin}/thanks`, origin);
-    target.searchParams.set("venue", slug);
-    if (fail) target.searchParams.set("status", "failed");
-    else target.searchParams.set("status", "paid");
-    if (t) target.searchParams.set("t", t);
-    // Carry the order code through even when the session lookup missed: `/thanks`
-    // uses it as a second attempt at resolving the table, and without it the
-    // guest lands on a menu with no table attached.
-    if (s) target.searchParams.set("s_code", s);
-    return NextResponse.redirect(target, 303);
-  }
-
-  return NextResponse.redirect(new URL("/r/unknown", origin), 303);
+  return NextResponse.redirect(new URL("/r/unknown", url.origin), 303);
 }

@@ -33,6 +33,8 @@ import type {
   QueueOrderView,
   VenuePublic,
 } from "@/lib/types";
+import { after } from "next/server";
+import { reconcileVenue } from "@/lib/payments";
 import { paymentsAllowed } from "@/lib/site";
 import { formatTableLabel, orderRef, startOfToday } from "@/lib/util";
 
@@ -454,32 +456,11 @@ export type GuestOrderHistory = {
     status: string;
     total: number;
     createdAt: string;
+    paymentStatus: string;
     lines: GuestOrderLine[];
   }[];
   total: number;
 };
-
-/**
- * Mark the orders covered by a successful payment as settled.
- *
- * This is the fix for "I paid €69.50 and the bill still says €116": the table
- * bill used to sum EVERY order still attached to the open session, including
- * ones already paid for. Now each paid order carries payment_status='paid'
- * plus the amount actually settled, and the bill subtracts them.
- *
- * We deliberately keep session_id — the row must stay attached to the sitting
- * so the guest's history and the venue's day report can reconstruct it.
- */
-export async function settlePaidOrders(venueId: string, orderIds: string[]) {
-  if (orderIds.length === 0) return 0;
-  const now = new Date();
-  const rows = await db
-    .update(orders)
-    .set({ status: "closed", closed_at: now, payment_status: "paid" })
-    .where(and(eq(orders.venue_id, venueId), inArray(orders.id, orderIds)))
-    .returning({ id: orders.id, total: orders.total });
-  return rows.length;
-}
 
 /**
  * Close tables nobody is using any more, so staff never have to.
@@ -491,6 +472,16 @@ export async function settlePaidOrders(venueId: string, orderIds: string[]) {
  * Runs at most once a minute per venue (it is called from the polled bar payload).
  */
 const lastExpiry = new Map<string, number>();
+/** Run work after the response where the runtime allows it, else fire and forget. */
+function runInBackground(fn: () => Promise<unknown>) {
+  const safe = () => fn().catch((err) => console.error("[background]", (err as Error).message));
+  try {
+    after(safe);
+  } catch {
+    void safe();
+  }
+}
+
 export async function expireIdleSessions(venueId: string): Promise<number> {
   const nowMs = Date.now();
   if (nowMs - (lastExpiry.get(venueId) ?? 0) < 60_000) return 0;
@@ -516,7 +507,14 @@ export async function expireIdleSessions(venueId: string): Promise<number> {
     await db
       .update(orders)
       .set({ status: "closed", closed_at: new Date() })
-      .where(and(inArray(orders.session_id, ids), eq(orders.status, "served")));
+      .where(
+        and(inArray(orders.session_id, ids), inArray(orders.status, ["served", "new", "making"])),
+      );
+    // Never accepted by the bar and now stale: discard rather than leave a ghost.
+    await db
+      .update(orders)
+      .set({ status: "declined", closed_at: new Date() })
+      .where(and(inArray(orders.session_id, ids), eq(orders.status, "pending_confirm")));
   }
   return ids.length;
 }
@@ -643,6 +641,8 @@ export async function buildBarPayload(venue: Venue): Promise<BarPayload> {
   const venuePub = toVenuePublic(venue);
   // Housekeeping: tables nobody uses close by themselves (throttled, never throws).
   await expireIdleSessions(venue.id).catch(() => 0);
+  // Safety net for lost payment notifications (throttled, never throws).
+  runInBackground(() => reconcileVenue(venue));
 
   const tableRows = await db
     .select()
@@ -700,6 +700,8 @@ export async function buildBarPayload(venue: Venue): Promise<BarPayload> {
       total: o.total,
       createdAt: o.created_at.toISOString(),
       lines: lineMap.get(o.id) ?? [],
+      paid: o.payment_status === "paid",
+      paidAt: o.paid_at ? o.paid_at.toISOString() : null,
     };
     if (o.status === "pending_confirm") {
       pending.push(base);
@@ -718,8 +720,15 @@ export async function buildBarPayload(venue: Venue): Promise<BarPayload> {
       );
     }
   }
+  const paidBySession = new Map<string, number>();
+  for (const o of relevant) {
+    if (o.payment_status === "paid") {
+      paidBySession.set(o.session_id, (paidBySession.get(o.session_id) ?? 0) + Number(o.total));
+    }
+  }
   for (const s of openSessions) {
     s.pendingCount = pendingBySession.get(s.id) ?? 0;
+    s.paidTotal = Math.round((paidBySession.get(s.id) ?? 0) * 100) / 100;
   }
 
   const callRows = await db

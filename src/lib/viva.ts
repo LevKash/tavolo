@@ -1,3 +1,5 @@
+import { createHash } from "crypto";
+
 /**
  * Viva Wallet (Viva.com) Smart Checkout client.
  *
@@ -105,7 +107,9 @@ const tokenCache = new Map<string, CachedToken>();
 export async function getAccessToken(
   creds: Pick<VivaCredentials, "env" | "clientId" | "clientSecret">,
 ): Promise<string> {
-  const cacheKey = `${creds.env}:${creds.clientId}`;
+  // The secret is part of the key so a rotated or wrong secret cannot ride on a
+  // cached token.
+  const cacheKey = `${creds.env}:${creds.clientId}:${createHash("sha256").update(creds.clientSecret).digest("hex").slice(0, 16)}`;
   const cached = tokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
 
@@ -231,16 +235,21 @@ export async function createPaymentOrder(
 
   // String() on a 16-digit number is safe here only because Viva serialises the
   // value; we never do arithmetic on it afterwards.
-  const orderCode = String(json.orderCode);
+  // Read the code from the raw text: 16-digit codes can exceed MAX_SAFE_INTEGER,
+  // and JSON.parse would silently round them.
+  const orderCode = /"orderCode"\s*:\s*"?(\d+)"?/.exec(raw)?.[1] ?? String(json.orderCode);
   return { orderCode, checkoutUrl: `${ep.checkout}?ref=${encodeURIComponent(orderCode)}` };
 }
 
 export interface VivaTransaction {
   transactionId: string;
   orderCode: string;
+  /** Our own reference (`ordavo:<payment id>`) that Viva echoes on the transaction. */
+  merchantTrns: string;
   /** Viva statusId: 'F' = finalised/success, 'E' = error, 'P' = pending, 'A' | 'M' = in progress. */
   statusId: string;
-  amount: number;
+  /** Amount in EUR cents. Viva's v2 transaction API reports MAJOR units (10 = EUR 10.00). */
+  amountCents: number;
   currencyCode: string;
   paid: boolean;
 }
@@ -280,105 +289,6 @@ export async function fetchWebhookKey(creds: {
   return json.Key ?? json.key ?? "";
 }
 
-/**
- * Fetches one transaction — used as the webhook fallback and for manual verify.
- */
-/**
- * Reads the state of a payment ORDER (not a transaction). Needed when the guest
- * returns from the hosted checkout without a usable transaction id: the order
- * still reports whether it was paid, so a paid bill can settle instead of
- * sitting unpaid forever.
- *
- * Viva order states: 0 = pending, 1 = expired, 2 = canceled, 3 = paid.
- * Older deployments also use letter codes, so both are accepted.
- */
-/**
- * Look up a successful payment by the reference WE chose (`merchantTrns`).
- *
- * This is the only reliable way to settle a bill: Viva mints a fresh `orderCode`
- * every time the guest opens checkout, so the code stored on the session is
- * frequently not the one that was paid. `merchantTrns` is written by us at
- * payment-creation time and appears on every transaction, so it survives
- * re-mints. The transactions endpoint only accepts a date range — pass the day
- * the payment was started.
- */
-export async function findPaidTransactionByMerchantTrns(
-  creds: VivaCredentials,
-  merchantTrns: string,
-  day: Date,
-): Promise<{ paid: boolean; transactionId: string; amount: number; statusId: string }> {
-  const ep = endpointsFor(creds.env);
-  const auth = Buffer.from(`${creds.merchantId}:${creds.apiKey ?? ""}`).toString("base64");
-  const iso = day.toISOString().slice(0, 10);
-  // The endpoint wants whole days (YYYY-MM-DD). Search a small window around the
-  // payment date so a payment that started just before midnight still matches.
-  const from = new Date(day.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const to = new Date(day.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const url =
-    `${ep.legacyApi}/api/transactions/?dateFrom=${from}&dateTo=${to}` +
-    `&merchantTrns=${encodeURIComponent(merchantTrns)}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Basic ${auth}` },
-    cache: "no-store",
-  });
-  const raw = await res.text();
-  if (!res.ok) {
-    throw new VivaError(`Viva transactions lookup failed (${res.status})`, raw, res.status);
-  }
-  const json = JSON.parse(raw) as {
-    Transactions?: {
-      TransactionId?: string;
-      StatusId?: string;
-      Amount?: number;
-      MerchantTrns?: string;
-    }[];
-  };
-  // Viva ignores the merchantTrns filter, so narrow client-side. Status 'F' is a
-  // captured payment; anything else (pending, cancelled, refunded) does not
-  // settle a bill.
-  const match = (json.Transactions ?? []).find(
-    (t) => t.MerchantTrns === merchantTrns && String(t.StatusId ?? "").toUpperCase() === "F",
-  );
-  return {
-    paid: Boolean(match),
-    transactionId: String(match?.TransactionId ?? ""),
-    amount: Number(match?.Amount ?? 0),
-    statusId: String(match?.StatusId ?? ""),
-  };
-}
-
-export async function retrieveOrderState(
-  creds: VivaCredentials,
-  orderCode: string,
-): Promise<{ paid: boolean; stateId: string; amount: number; transactionId: string }> {
-  const ep = endpointsFor(creds.env);
-  const auth = Buffer.from(`${creds.merchantId}:${creds.apiKey ?? ""}`).toString("base64");
-  const res = await fetch(`${ep.legacyApi}/api/orders/${encodeURIComponent(orderCode)}`, {
-    headers: { Authorization: `Basic ${auth}` },
-    cache: "no-store",
-  });
-  const raw = await res.text();
-  if (!res.ok) {
-    throw new VivaError(`Viva retrieve order failed (${res.status})`, raw, res.status);
-  }
-  const json = JSON.parse(raw) as {
-    OrderCode?: number | string;
-    StateId?: number | string;
-    RequestAmount?: number;
-    Amount?: number;
-    Transactions?: { TransactionId?: string }[];
-  };
-  const stateId = String(json.StateId ?? "");
-  // 3 (or legacy 'F') means the order is fully paid.
-  const paid = stateId === "3" || stateId.toUpperCase() === "F";
-  return {
-    paid,
-    stateId,
-    amount: Number(json.RequestAmount ?? json.Amount ?? 0),
-    transactionId: String(json.Transactions?.[0]?.TransactionId ?? ""),
-  };
-}
-
 export async function retrieveTransaction(
   creds: VivaCredentials,
   transactionId: string,
@@ -396,6 +306,7 @@ export async function retrieveTransaction(
   const json = JSON.parse(raw) as {
     transactionId?: string;
     orderCode?: number | string;
+    merchantTrns?: string | null;
     statusId?: string;
     amount?: number;
     currencyCode?: string;
@@ -403,11 +314,40 @@ export async function retrieveTransaction(
   const statusId = String(json.statusId ?? "");
   return {
     transactionId: String(json.transactionId ?? transactionId),
-    orderCode: String(json.orderCode ?? ""),
+    orderCode: /"orderCode"\s*:\s*"?(\d+)"?/.exec(raw)?.[1] ?? String(json.orderCode ?? ""),
+    merchantTrns: String(json.merchantTrns ?? ""),
     statusId,
-    amount: Number(json.amount ?? 0),
+    // Verified against a real demo transaction: `amount` is in euros (10 = EUR 10).
+    amountCents: Math.round(Number(json.amount ?? 0) * 100),
     currencyCode: String(json.currencyCode ?? ""),
     // Viva reports statusId 'F' once the payment is fully captured.
     paid: statusId.toUpperCase() === "F",
   };
+}
+
+/**
+ * Fallback lookup for a payment whose transaction id never reached us (webhook
+ * lost, guest closed the tab before the redirect). Legacy API, Basic auth with
+ * MerchantId:ApiKey, so it only works when the venue saved its API key.
+ * Returns transaction ids with status F for the order; each one must still be
+ * verified with retrieveTransaction() before anything is settled.
+ */
+export async function findPaidTransactionIdsByOrderCode(
+  creds: VivaCredentials,
+  orderCode: string,
+): Promise<string[]> {
+  if (!creds.merchantId || !creds.apiKey || !orderCode) return [];
+  const ep = endpointsFor(creds.env);
+  const basic = Buffer.from(`${creds.merchantId}:${creds.apiKey}`).toString("base64");
+  const res = await fetch(
+    `${ep.legacyApi}/api/transactions?ordercode=${encodeURIComponent(orderCode)}`,
+    { headers: { Authorization: `Basic ${basic}` }, cache: "no-store" },
+  );
+  if (!res.ok) return [];
+  const json = (await res.json().catch(() => ({}))) as {
+    Transactions?: { TransactionId?: string; StatusId?: string }[];
+  };
+  return (json.Transactions ?? [])
+    .filter((t) => String(t.StatusId ?? "").toUpperCase() === "F" && t.TransactionId)
+    .map((t) => String(t.TransactionId));
 }

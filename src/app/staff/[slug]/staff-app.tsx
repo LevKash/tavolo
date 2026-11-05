@@ -216,6 +216,11 @@ export default function StaffApp(props: {
                     <p className="text-xs text-fog">
                       Opened {timeAgo(s.openedAt, now)} · Running total{" "}
                       <span className="font-bold text-gold-2">{money(s.total)}</span>
+                      {(s.paidTotal ?? 0) > 0 && (
+                        <span className="ml-1.5 font-bold text-good">
+                          · {money(s.paidTotal ?? 0)} paid by card, ring the receipt
+                        </span>
+                      )}
                     </p>
                   </div>
                   <button

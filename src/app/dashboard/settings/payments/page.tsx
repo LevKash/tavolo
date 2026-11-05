@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { venues } from "@/db/schema";
 import { requireUser } from "@/lib/auth";
-import { paymentsAllowed } from "@/lib/site";
+import { paymentsAllowed, siteUrl } from "@/lib/site";
 import DashVivaSettings, { type VivaSettingsData } from "@/components/dash-viva-settings";
 
 export const dynamic = "force-dynamic";
@@ -26,8 +26,11 @@ export default async function VivaSettingsPage() {
     merchantId: venue.viva_merchant_id ?? "",
     sourceCode: venue.viva_source_code ?? "",
     hasSecret: Boolean(venue.viva_client_secret),
+    hasApiKey: Boolean(venue.viva_api_key),
     enabled: Boolean(venue.payments_enabled),
-    webhookUrl: "/api/webhooks/viva",
+    webhookUrl: `${siteUrl()}/api/webhooks/viva/${venue.webhook_token}`,
+    successUrl: `${siteUrl()}/r?venue=${venue.slug}&s={OrderCode}&t={TransactionId}`,
+    failureUrl: `${siteUrl()}/r?venue=${venue.slug}&s={OrderCode}&t={TransactionId}&fail=1`,
   };
 
   return (

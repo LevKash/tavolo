@@ -11,6 +11,9 @@ import {
   menuViews,
   orderLines,
   orders,
+  paymentEvents,
+  paymentOrders,
+  payments,
   tableSessions,
   tables,
   users,
@@ -762,6 +765,14 @@ export async function adminDeleteVenueAction(venueId: string): Promise<ActionRes
             ),
           );
       }
+      // Payment records reference the venue without a cascade (history must not
+      // vanish when a table is deleted), so they go explicitly with the venue.
+      const payIds = (
+        await tx.select({ id: payments.id }).from(payments).where(eq(payments.venue_id, venueId))
+      ).map((r) => r.id);
+      if (payIds.length) await tx.delete(paymentOrders).where(inArray(paymentOrders.payment_id, payIds));
+      await tx.delete(paymentEvents).where(eq(paymentEvents.venue_id, venueId));
+      await tx.delete(payments).where(eq(payments.venue_id, venueId));
       await tx.delete(orders).where(eq(orders.venue_id, venueId));
       await tx.delete(tableSessions).where(eq(tableSessions.venue_id, venueId));
       await tx.delete(waiterCalls).where(eq(waiterCalls.venue_id, venueId));
@@ -908,6 +919,7 @@ export async function adminDeleteAccountAction(userId: string): Promise<ActionRe
 export async function saveVivaSettingsAction(input: {
   clientId: string;
   clientSecret: string;
+  apiKey?: string;
   merchantId: string;
   sourceCode: string;
   env: string;
@@ -917,6 +929,7 @@ export async function saveVivaSettingsAction(input: {
     const venue = await getOwnerVenue();
     const clientId = (input.clientId ?? "").trim();
     const clientSecret = (input.clientSecret ?? "").trim();
+    const apiKey = String(input.apiKey ?? "").trim();
     const merchantId = (input.merchantId ?? "").trim();
     const sourceCode = (input.sourceCode ?? "").trim();
     const env: VivaEnv = input.env === "live" ? "live" : "demo";
@@ -926,7 +939,7 @@ export async function saveVivaSettingsAction(input: {
     }
     // Keep the stored secret when the field is left blank (the UI never echoes it).
     const existing = await db
-      .select({ s: venues.viva_client_secret })
+      .select({ s: venues.viva_client_secret, k: venues.viva_api_key })
       .from(venues)
       .where(eq(venues.id, venue.id))
       .limit(1);
@@ -934,12 +947,17 @@ export async function saveVivaSettingsAction(input: {
     if (!clientId || !secret || !merchantId) {
       return { error: "Client ID, Client Secret and Merchant ID are all required." };
     }
+    if (input.enabled && !(apiKey || existing[0]?.k)) {
+      return { error: "The Viva API Key is required to take card payments." };
+    }
 
     await db
       .update(venues)
       .set({
         viva_client_id: clientId,
         viva_client_secret: secret,
+        // Blank keeps the stored key (the UI never echoes it).
+        viva_api_key: apiKey || existing[0]?.k || "",
         viva_merchant_id: merchantId,
         viva_source_code: sourceCode,
         viva_env: env,
