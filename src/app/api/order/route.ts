@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tables } from "@/db/schema";
 import { getVenueBySlug, placeOrder } from "@/lib/core";
+import { reportError } from "@/lib/monitor";
 import { UUID_RE } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     const known = ["item_unavailable", "empty_order"].includes((err as Error).message);
-    if (!known) console.error("[order] unexpected failure:", (err as Error).message);
+    if (!known) await reportError("/api/order", err, { method: "POST" });
     const message =
       (err as Error).message === "item_unavailable"
         ? "One of the items is sold out — refresh the menu and try again."

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { reportError } from "@/lib/monitor";
 import { processWebhook } from "@/lib/payments";
 
 export const dynamic = "force-dynamic";
@@ -23,5 +24,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ignored: "non_json" });
   }
   const r = await processWebhook(null, payload);
+  if (r.status >= 500) await reportError("/api/webhooks/viva", new Error("webhook answered 500 (Viva will retry)"), { method: "POST" });
   return NextResponse.json(r.body, { status: r.status });
 }

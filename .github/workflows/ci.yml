@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Optional: a Neon branch (with the docs/*.sql migrations applied) used ONLY
+      # for tests. Without this secret the database tests are skipped.
+      TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Tests that need no database
+        run: npx vitest run tests/viva.test.ts tests/monitor.test.ts
+      - name: Database tests
+        if: ${{ env.TEST_DATABASE_URL != '' }}
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+        run: npx vitest run
+      - name: Build
+        env:
+          DATABASE_URL: postgres://ci:ci@127.0.0.1:1/ci
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npx next build
