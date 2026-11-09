@@ -20,7 +20,7 @@ export function SiteReel({ label, hint }: { label: string; hint: string }) {
   }, []);
 
   return (
-    <figure className="mx-auto w-full max-w-[280px] sm:max-w-[300px]">
+    <figure className="mx-auto w-full max-w-[280px] sm:max-w-[340px] lg:max-w-[min(460px,calc((100svh_-_150px)*0.5625))]">
       <div className="rounded-[2.4rem] border border-gold/30 bg-black p-2 shadow-[0_0_60px_rgba(201,164,92,0.18)]">
         <video
           ref={ref}

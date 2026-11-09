@@ -107,7 +107,7 @@ export default async function LandingPage({ searchParams }: Props) {
   return (
     <PageShell lang={lang} path="/">
       {/* Hero */}
-      <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-16 pt-6 sm:px-6 sm:pt-10 lg:grid-cols-[1.15fr_0.85fr] lg:gap-14 lg:pb-24">
+      <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-16 pt-6 sm:px-6 sm:pt-10 lg:grid-cols-[1fr_1fr] lg:gap-12 lg:pb-24">
         <div className="motion-safe:animate-rise">
           <h1 className="serif text-balance text-4xl font-semibold leading-[1.08] text-cream sm:text-6xl">
             {HEADLINE[lang]}
