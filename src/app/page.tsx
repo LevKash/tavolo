@@ -12,6 +12,7 @@ import {
 import {
   HEADLINE,
   MEASURE,
+  PaySection,
   STAYS,
   STEPS,
   SUBLINE,
@@ -65,7 +66,8 @@ const t = {
       ["Does it replace my cash register?", "No. Your cash register stays exactly as it is."],
       ["Do guests need an app?", "No. They scan the QR code and the menu opens in their phone's browser."],
       ["Which languages?", "English and Greek."],
-      ["Who takes payment?", "You, the way you do today."],
+      ["Who takes payment?", "Guests can pay by card on their phone, straight into your own Viva Wallet account, or pay you the way they do today. You choose per venue."],
+      ["Does Ordavo issue receipts?", "No. Your staff ring the receipt in their own system, as today. The bar screen shows which orders are already paid."],
       ["What does it cost after the pilot?", "We agree the price with you before the pilot starts."],
     ],
     finalTitle: "Want to see it in your venue?",
@@ -89,7 +91,8 @@ const t = {
       ["Αντικαθιστά το ταμείο μου;", "Όχι. Το ταμείο σας μένει ακριβώς όπως είναι."],
       ["Χρειάζονται οι πελάτες εφαρμογή;", "Όχι. Σκανάρουν το QR και το μενού ανοίγει στον browser του κινητού τους."],
       ["Σε ποιες γλώσσες;", "Αγγλικά και ελληνικά."],
-      ["Ποιος εισπράττει την πληρωμή;", "Εσείς, όπως σήμερα."],
+      ["Ποιος εισπράττει την πληρωμή;", "Οι πελάτες μπορούν να πληρώνουν με κάρτα από το κινητό, κατευθείαν στον δικό σας λογαριασμό Viva Wallet, ή να σας πληρώνουν όπως σήμερα. Επιλέγετε εσείς ανά κατάστημα."],
+      ["Εκδίδει το Ordavo αποδείξεις;", "Όχι. Το προσωπικό σας εκδίδει την απόδειξη στο δικό του σύστημα, όπως σήμερα. Η οθόνη του μπαρ δείχνει ποιες παραγγελίες είναι ήδη πληρωμένες."],
       ["Πόσο κοστίζει μετά το πιλοτικό;", "Συμφωνούμε την τιμή μαζί σας πριν ξεκινήσει το πιλοτικό."],
     ],
     finalTitle: "Θέλετε να το δείτε στο μαγαζί σας;",
@@ -133,6 +136,8 @@ export default async function LandingPage({ searchParams }: Props) {
           <StepsGrid lang={lang} />
         </div>
       </section>
+
+      <PaySection lang={lang} widthClass="max-w-6xl" />
 
       {/* What stays the same */}
       <section aria-labelledby="stays" className="mx-auto max-w-6xl px-4 py-12 sm:px-6">

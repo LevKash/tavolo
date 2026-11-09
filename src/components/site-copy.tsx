@@ -38,7 +38,7 @@ export const STAYS: Record<Lang, { heading: string; items: { title: string; body
     items: [
       { title: "No app for guests", body: "The menu opens straight from the QR code in the phone's browser." },
       { title: "No new hardware", body: "A phone or tablet you already own becomes the bar screen." },
-      { title: "Your cash register stays as it is", body: "You charge the way you do today. Ordavo does not touch it." },
+      { title: "Your cash register stays as it is", body: "Receipts are still rung on your own system, as today. Ordavo does not replace it." },
       { title: "We do the setup", body: "We set up your menu and print the QR codes." },
       { title: "Changes in seconds", body: "Prices and sold-out items are updated in seconds, from your phone." },
     ],
@@ -48,7 +48,7 @@ export const STAYS: Record<Lang, { heading: string; items: { title: string; body
     items: [
       { title: "Καμία εφαρμογή για τους πελάτες", body: "Το μενού ανοίγει κατευθείαν από το QR, στον browser του κινητού." },
       { title: "Κανένας νέος εξοπλισμός", body: "Ένα κινητό ή tablet που ήδη έχετε γίνεται η οθόνη του μπαρ." },
-      { title: "Το ταμείο σας μένει όπως είναι", body: "Χρεώνετε όπως σήμερα. Το Ordavo δεν το αγγίζει." },
+      { title: "Το ταμείο σας μένει όπως είναι", body: "Οι αποδείξεις εκδίδονται στο δικό σας σύστημα, όπως σήμερα. Το Ordavo δεν το αντικαθιστά." },
       { title: "Την εγκατάσταση την κάνουμε εμείς", body: "Φτιάχνουμε το μενού σας και τυπώνουμε τα QR." },
       { title: "Αλλαγές σε δευτερόλεπτα", body: "Τιμές και εξαντλημένα προϊόντα αλλάζουν σε δευτερόλεπτα, από το κινητό σας." },
     ],
@@ -112,5 +112,52 @@ export function StepsGrid({ lang }: { lang: Lang }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+export const PAY: Record<Lang, { heading: string; body: string; items: string[] }> = {
+  en: {
+    heading: "Guests can pay from their phone",
+    body: "When they are ready, guests pay for what they ordered by card or Apple Pay. The money goes straight into your own Viva Wallet account. Ordavo never touches it and never sees the card.",
+    items: [
+      "Each round is paid on its own. Paying does not close the table.",
+      "The bar screen shows PAID next to the order, so your staff ring the receipt in their own system, as they do today.",
+      "A guest who wants the receipt first simply does not pay on the phone.",
+      "Connecting your Viva account takes a couple of days. We set it up with you.",
+    ],
+  },
+  el: {
+    heading: "Οι πελάτες μπορούν να πληρώνουν από το κινητό",
+    body: "Όταν είναι έτοιμοι, πληρώνουν όσα παρήγγειλαν με κάρτα ή Apple Pay. Τα χρήματα πηγαίνουν κατευθείαν στον δικό σας λογαριασμό Viva Wallet. Το Ordavo δεν τα αγγίζει και δεν βλέπει την κάρτα.",
+    items: [
+      "Κάθε γύρος πληρώνεται ξεχωριστά. Η πληρωμή δεν κλείνει το τραπέζι.",
+      "Η οθόνη του μπαρ δείχνει ΠΛΗΡΩΜΕΝΟ δίπλα στην παραγγελία, ώστε το προσωπικό να εκδώσει την απόδειξη στο δικό του σύστημα, όπως σήμερα.",
+      "Όποιος θέλει πρώτα την απόδειξη, απλώς δεν πληρώνει από το κινητό.",
+      "Η σύνδεση του λογαριασμού Viva διαρκεί λίγες μέρες. Την κάνουμε μαζί σας.",
+    ],
+  },
+};
+
+export function PaySection({ lang, widthClass }: { lang: Lang; widthClass: string }) {
+  const p = PAY[lang];
+  return (
+    <section aria-labelledby="pay" className={`mx-auto ${widthClass} px-4 py-12 sm:px-6`}>
+      <div className="grid gap-8 rounded-2xl border border-gold/30 bg-gold/[0.04] p-6 sm:p-9 md:grid-cols-2">
+        <div>
+          <h2 id="pay" className="serif text-3xl font-semibold text-cream sm:text-4xl">
+            {p.heading}
+          </h2>
+          <p className="mt-4 text-base leading-relaxed text-fog">{p.body}</p>
+        </div>
+        <ul className="space-y-3 text-sm leading-relaxed text-fog sm:text-base">
+          {p.items.map((it) => (
+            <li key={it} className="flex gap-3">
+              <span aria-hidden="true" className="mt-1 text-gold">✓</span>
+              <span>{it}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }

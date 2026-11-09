@@ -4,6 +4,7 @@ import { PageShell, pageAlternates, resolveLang, type Lang } from "@/components/
 import {
   HEADLINE,
   MEASURE,
+  PaySection,
   STAYS,
   STEPS,
   SUBLINE,
@@ -89,6 +90,8 @@ export default async function PilotPage({ searchParams }: Props) {
           <StepsGrid lang={lang} />
         </div>
       </section>
+
+      <PaySection lang={lang} widthClass="max-w-5xl" />
 
       <section aria-labelledby="stays" className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
         <div className="glass rounded-2xl p-6 sm:p-9">

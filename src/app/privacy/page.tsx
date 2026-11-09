@@ -42,7 +42,7 @@ const content: Record<Lang, { intro: string; sections: LegalSection[] }> = {
           "The orders you place: items, quantities, notes you type, the table or sunbed number and the time.",
           "How often menu items are viewed (counts).",
         ],
-        p: ["In this version we do not ask guests for a name, an email address or any payment details."],
+        p: ["We do not ask guests for a name or an email address. Ordavo never sees card details: if a venue offers card payment, the guest pays on the payment provider's own page. We store only a reference to the payment (amount, time, the provider's transaction number) linked to the order."],
       },
       {
         h: "What we collect from venue owners",
@@ -79,6 +79,7 @@ const content: Record<Lang, { intro: string; sections: LegalSection[] }> = {
           "Vercel: hosting of the website and application.",
           "Neon: database hosting.",
           "Telegram: notifications to us about new requests.",
+          "Viva Wallet: card payment processing, only for venues that enable it. The payment is made on Viva's page, into the venue's own account.",
         ],
         p: [
           "These providers process data on our behalf. Some of them may process data outside the European Economic Area, under standard contractual clauses or similar safeguards. We do not sell your data and we do not use it for advertising.",
@@ -122,7 +123,7 @@ const content: Record<Lang, { intro: string; sections: LegalSection[] }> = {
           "Τις παραγγελίες που κάνετε: προϊόντα, ποσότητες, σημειώσεις που γράφετε, τον αριθμό τραπεζιού ή ξαπλώστρας και την ώρα.",
           "Πόσες φορές προβλήθηκαν τα προϊόντα του μενού (μετρητές).",
         ],
-        p: ["Σε αυτή την έκδοση δεν ζητάμε από τους πελάτες όνομα, email ή στοιχεία πληρωμής."],
+        p: ["Δεν ζητάμε από τους πελάτες όνομα ή email. Το Ordavo δεν βλέπει ποτέ στοιχεία κάρτας: αν το κατάστημα προσφέρει πληρωμή με κάρτα, ο πελάτης πληρώνει στη σελίδα του παρόχου πληρωμών. Αποθηκεύουμε μόνο μια αναφορά της πληρωμής (ποσό, ώρα, αριθμός συναλλαγής του παρόχου) συνδεδεμένη με την παραγγελία."],
       },
       {
         h: "Τι συλλέγουμε από τους ιδιοκτήτες καταστημάτων",
@@ -159,6 +160,7 @@ const content: Record<Lang, { intro: string; sections: LegalSection[] }> = {
           "Vercel: φιλοξενία του ιστότοπου και της εφαρμογής.",
           "Neon: φιλοξενία της βάσης δεδομένων.",
           "Telegram: ειδοποιήσεις προς εμάς για νέα αιτήματα.",
+          "Viva Wallet: επεξεργασία πληρωμών με κάρτα, μόνο για καταστήματα που την ενεργοποιούν. Η πληρωμή γίνεται στη σελίδα της Viva, στον δικό λογαριασμό του καταστήματος.",
         ],
         p: [
           "Οι πάροχοι αυτοί επεξεργάζονται δεδομένα για λογαριασμό μας. Κάποιοι μπορεί να επεξεργάζονται δεδομένα εκτός Ευρωπαϊκού Οικονομικού Χώρου, με τυπικές συμβατικές ρήτρες ή αντίστοιχες εγγυήσεις. Δεν πουλάμε τα δεδομένα σας και δεν τα χρησιμοποιούμε για διαφήμιση.",

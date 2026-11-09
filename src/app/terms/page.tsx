@@ -46,7 +46,7 @@ const content: Record<Lang, { intro: string; sections: LegalSection[] }> = {
       {
         h: "Payments and fiscal obligations",
         p: [
-          "Ordavo does not process payments and does not issue receipts or other fiscal documents. The venue charges its guests in its own way, as it does today.",
+          "Ordavo does not hold or process money. Where a venue enables card payment, the payment is made through the venue's own Viva Wallet account and the money goes to the venue. Ordavo does not issue receipts or other fiscal documents.",
           "The venue is responsible for its own sales records, receipts and taxes.",
         ],
       },
@@ -103,7 +103,7 @@ const content: Record<Lang, { intro: string; sections: LegalSection[] }> = {
       {
         h: "Πληρωμές και φορολογικές υποχρεώσεις",
         p: [
-          "Το Ordavo δεν επεξεργάζεται πληρωμές και δεν εκδίδει αποδείξεις ή άλλα φορολογικά παραστατικά. Το κατάστημα χρεώνει τους πελάτες του με τον δικό του τρόπο, όπως σήμερα.",
+          "Το Ordavo δεν κρατά και δεν επεξεργάζεται χρήματα. Όπου το κατάστημα ενεργοποιεί την πληρωμή με κάρτα, η πληρωμή γίνεται μέσω του δικού του λογαριασμού Viva Wallet και τα χρήματα πηγαίνουν στο κατάστημα. Το Ordavo δεν εκδίδει αποδείξεις ή άλλα φορολογικά παραστατικά.",
           "Το κατάστημα είναι υπεύθυνο για τα δικά του αρχεία πωλήσεων, τις αποδείξεις και τους φόρους του.",
         ],
       },
