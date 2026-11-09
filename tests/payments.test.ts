@@ -657,6 +657,50 @@ describe("review fixes", () => {
   });
 });
 
+describe("return route /r", () => {
+  it("finds the payment by order code when the return URL carries no venue", async () => {
+    const f = await fixture();
+    const o = await f.addOrder(9);
+    const res = await f.pay();
+    if (!res.ok) throw new Error("setup");
+    const p = await getPayment(res.paymentId);
+    const tx = txFor(p);
+    vi.mocked(retrieveTransaction).mockResolvedValueOnce(tx);
+    const { GET } = await import("@/app/r/route");
+    const out = await GET(
+      new Request(`https://x.test/r?s=${p.order_code}&t=${tx.transactionId}`),
+    );
+    expect(out.status).toBe(303);
+    expect(out.headers.get("location")).toBe(`https://x.test/thanks?p=${p.id}`);
+    expect((await getOrder(o.id)).payment_status).toBe("paid");
+  });
+
+  it("works with the venue parameter too, and is not fooled by another venue's slug", async () => {
+    const a = await fixture();
+    const b = await fixture();
+    await a.addOrder(9);
+    const res = await a.pay();
+    if (!res.ok) throw new Error("setup");
+    const p = await getPayment(res.paymentId);
+    const { GET } = await import("@/app/r/route");
+    const ok = await GET(new Request(`https://x.test/r?venue=${a.venue.slug}&s=${p.order_code}`));
+    expect(ok.headers.get("location")).toContain(`/thanks?p=${p.id}`);
+    const wrong = await GET(new Request(`https://x.test/r?venue=${b.venue.slug}&s=${p.order_code}`));
+    expect(wrong.headers.get("location")).toContain("/r/unknown");
+  });
+
+  it("sends a failed return to the thanks page marked failed", async () => {
+    const f = await fixture();
+    await f.addOrder(9);
+    const res = await f.pay();
+    if (!res.ok) throw new Error("setup");
+    const p = await getPayment(res.paymentId);
+    const { GET } = await import("@/app/r/route");
+    const out = await GET(new Request(`https://x.test/r?s=${p.order_code}&fail=1`));
+    expect(out.headers.get("location")).toBe(`https://x.test/thanks?p=${p.id}&status=failed`);
+  });
+});
+
 describe("venue type", () => {
   it("new venues get their own webhook token", async () => {
     const f = await fixture();
