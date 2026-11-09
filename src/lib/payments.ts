@@ -327,6 +327,7 @@ export async function settlePayment(
   source: string,
 ): Promise<SettleResult> {
   let flagged = "";
+  let eventVenueId: string | undefined;
   const result = await db.transaction(async (trx): Promise<SettleResult> => {
     const [p] = await trx
       .select()
@@ -334,6 +335,7 @@ export async function settlePayment(
       .where(eq(payments.id, paymentId))
       .for("update");
     if (!p) return { outcome: "unmatched" };
+    eventVenueId = p.venue_id;
     if (p.status === "paid") return { outcome: "already", paymentId: p.id, settled: 0 };
 
     const now = new Date();
@@ -441,6 +443,7 @@ export async function settlePayment(
   await recordEvent({
     source,
     outcome: result.outcome === "rejected" ? `rejected:${result.reason ?? ""}` : result.outcome,
+    venueId: eventVenueId,
     paymentId: result.paymentId ?? paymentId,
     transactionId: tx.transactionId,
     detail: flagged,

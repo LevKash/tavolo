@@ -93,7 +93,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     open: open.length > 0,
     status: latest?.status ?? "unpaid",
-    paid: Boolean(recentlyPaid),
+    // "Paid" only while nothing new is owed: a second round must show Pay again.
+    paid: Boolean(recentlyPaid) && totalCents === 0,
     amount: totalCents / 100,
     amountPaid: latest?.status === "paid" ? latest.amount_cents / 100 : 0,
     paidAt: latest?.paid_at ? latest.paid_at.toISOString() : null,
