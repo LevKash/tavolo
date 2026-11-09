@@ -410,6 +410,27 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     });
   }
 
+  /**
+   * Idempotency key for the order being sent. It stays the same while the guest
+   * retries the SAME order (e.g. the response was lost on a weak connection), so
+   * the server returns the existing order instead of creating a duplicate. A
+   * different order gets a new key.
+   */
+  const submitKey = useRef<{ sig: string; key: string } | null>(null);
+  function keyFor(lines: unknown, note: string, source: string) {
+    const sig = JSON.stringify([lines, note, source]);
+    if (!submitKey.current || submitKey.current.sig !== sig) {
+      const key =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+              (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16),
+            );
+      submitKey.current = { sig, key };
+    }
+    return submitKey.current.key;
+  }
+
   async function sendOrder(
     rawLines: { itemId: string; qty: number }[],
     source: "menu" | "wheel",
@@ -435,10 +456,12 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
           source,
           firstSeenAt: firstSeenMs,
           guestId: guestId || undefined,
+          clientKey: keyFor(lines, note, source),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Order failed");
+      submitKey.current = null; // sent: the next order is a new one
       // The order is now on the server with this device's guest_id — pull the
       // fresh history so "your orders" shows it immediately.
       void reloadHistory();

@@ -519,34 +519,44 @@ export async function expireIdleSessions(venueId: string): Promise<number> {
   return ids.length;
 }
 
-/** Close a table (payment done at the cash desk). Ends the session. */
+/**
+ * Close a table (the final receipt was given). Ends the session.
+ * One transaction under the table lock: an order placed while the table closes
+ * either lands before (and is closed with it) or after (and opens a new
+ * session), never in a session that is closing.
+ */
 export async function closeTableSession(venueId: string, tableId: string) {
-  const session = await getOpenSession(venueId, tableId);
-  if (!session) return null;
-  const now = new Date();
-  await db
-    .update(orders)
-    .set({ status: "declined", closed_at: now })
-    .where(
-      and(
-        eq(orders.session_id, session.id),
-        eq(orders.status, "pending_confirm"),
-      ),
-    );
-  await db
-    .update(orders)
-    .set({ status: "closed", closed_at: now })
-    .where(
-      and(
-        eq(orders.session_id, session.id),
-        inArray(orders.status, ["new", "making", "served"]),
-      ),
-    );
-  await db
-    .update(tableSessions)
-    .set({ status: "closed", closed_at: now })
-    .where(eq(tableSessions.id, session.id));
-  return session;
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`session:${tableId}`}))`);
+    const rows = await tx
+      .select()
+      .from(tableSessions)
+      .where(
+        and(
+          eq(tableSessions.venue_id, venueId),
+          eq(tableSessions.table_id, tableId),
+          eq(tableSessions.status, "open"),
+        ),
+      )
+      .orderBy(desc(tableSessions.opened_at));
+    if (rows.length === 0) return null;
+    const now = new Date();
+    // Close every open session of the table (a duplicate would otherwise survive).
+    const ids = rows.map((r) => r.id);
+    await tx
+      .update(orders)
+      .set({ status: "declined", closed_at: now })
+      .where(and(inArray(orders.session_id, ids), eq(orders.status, "pending_confirm")));
+    await tx
+      .update(orders)
+      .set({ status: "closed", closed_at: now })
+      .where(and(inArray(orders.session_id, ids), inArray(orders.status, ["new", "making", "served"])));
+    await tx
+      .update(tableSessions)
+      .set({ status: "closed", closed_at: now })
+      .where(inArray(tableSessions.id, ids));
+    return rows[0];
+  });
 }
 
 // ---------------------------------------------------------------- menu
@@ -927,6 +937,8 @@ export interface PlaceOrderInput {
   /** Client-reported epoch ms of when the guest first opened the menu
    *  (used only to honour the 5-minute first-order welcome deal). */
   firstSeenAt?: number;
+  /** Client-generated UUID for this submit attempt (idempotency key). */
+  clientKey?: string;
 }
 
 export interface PlaceOrderResult {
@@ -951,6 +963,25 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   const result = await db.transaction(async (tx) => {
     // Find or create the open session under a per-table lock.
     const session = await findOrCreateOpenSession(tx, venueId, tableId);
+
+    // Retry of an order that already went through (the response got lost): hand
+    // back the existing order. The table lock above serialises concurrent retries.
+    if (input.clientKey) {
+      const dup = await tx
+        .select()
+        .from(orders)
+        .where(and(eq(orders.venue_id, venueId), eq(orders.client_key, input.clientKey)))
+        .limit(1);
+      if (dup[0]) {
+        return {
+          order: dup[0],
+          trusted: dup[0].status !== "pending_confirm",
+          firstOrderBonus: false,
+          passport: null,
+          passportFreeThis: 0,
+        };
+      }
+    }
 
     const venueFlags = await tx
       .select({ passport_enabled: venues.passport_enabled })
@@ -1153,6 +1184,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         // Persist the device identity so a returning guest can see their own
         // order history. `passportGuest` is already validated as a UUID.
         guest_id: isGuestId(passportGuest) ? passportGuest : null,
+        client_key: input.clientKey ?? null,
         total,
       })
       .returning();

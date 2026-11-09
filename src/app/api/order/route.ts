@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tables } from "@/db/schema";
 import { getVenueBySlug, placeOrder } from "@/lib/core";
+import { UUID_RE } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export async function POST(req: NextRequest) {
     source?: "menu" | "wheel";
     guestId?: string;
     firstSeenAt?: number;
+    clientKey?: string;
   };
   try {
     body = await req.json();
@@ -58,6 +60,10 @@ export async function POST(req: NextRequest) {
       guestId: typeof body.guestId === "string" ? body.guestId : undefined,
       firstSeenAt:
         typeof body.firstSeenAt === "number" ? body.firstSeenAt : undefined,
+      clientKey:
+        typeof body.clientKey === "string" && UUID_RE.test(body.clientKey)
+          ? body.clientKey
+          : undefined,
     });
     return NextResponse.json({
       ok: true,
@@ -74,12 +80,16 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
+    const known = ["item_unavailable", "empty_order"].includes((err as Error).message);
+    if (!known) console.error("[order] unexpected failure:", (err as Error).message);
     const message =
       (err as Error).message === "item_unavailable"
         ? "One of the items is sold out — refresh the menu and try again."
         : (err as Error).message === "empty_order"
           ? "Your order is empty."
           : "Could not place the order. Please try again.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    // Unexpected failures are 500 so they show up in the logs and the client can
+    // safely retry (the idempotency key prevents a duplicate).
+    return NextResponse.json({ error: message }, { status: known ? 400 : 500 });
   }
 }

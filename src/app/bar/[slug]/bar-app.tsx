@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PinGate, apiPost, useAlertSounds, useBarPayload } from "@/components/bar-api";
+import { PinGate, apiPost, useAlertSounds, useBarPayload, useWakeLock } from "@/components/bar-api";
 import { cn, money, timeAgo } from "@/lib/util";
 
 const STORE_KEY = "ordavo_bar_pin";
@@ -17,6 +17,7 @@ export default function BarApp(props: {
   const [actionMsg, setActionMsg] = useState("");
   const [now, setNow] = useState(Date.now());
   const { data, unauthorized, error, refresh } = useBarPayload(slug, pin);
+  useWakeLock(Boolean(pin));
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem(STORE_KEY);

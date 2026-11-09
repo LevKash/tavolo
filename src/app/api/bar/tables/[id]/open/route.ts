@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tables } from "@/db/schema";
 import { openSessionForTable } from "@/lib/core";
-import { checkBarAccess } from "@/lib/pin";
+import { barDenied, checkBarAccess } from "@/lib/pin";
 
 export const dynamic = "force-dynamic";
 
@@ -19,9 +19,9 @@ export async function POST(
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "");
+  const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "", req);
   if (!venue) {
-    return NextResponse.json({ error: "Invalid venue or PIN" }, { status: 401 });
+    return barDenied(body.slug ?? "", req);
   }
   const tbl = await db
     .select()

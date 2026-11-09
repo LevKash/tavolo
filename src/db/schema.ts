@@ -243,6 +243,9 @@ export const orders = pgTable(
     payment_status: text("payment_status").notNull().default("unpaid"),
     paid_amount: numeric("paid_amount", { precision: 10, scale: 2, mode: "number" }),
     // The payment that settled this order, and when.
+    // Client-generated key for one submit attempt. A retry after a lost response
+    // sends the same key and gets the existing order back instead of a duplicate.
+    client_key: text("client_key"),
     payment_id: uuid("payment_id"),
     paid_at: timestamp("paid_at", { withTimezone: true, mode: "date" }),
     total: numeric("total", { precision: 10, scale: 2, mode: "number" })
@@ -257,6 +260,9 @@ export const orders = pgTable(
     index("orders_venue_created_idx").on(t.venue_id, t.created_at),
     index("orders_session_idx").on(t.session_id),
     index("orders_venue_status_idx").on(t.venue_id, t.status),
+    uniqueIndex("orders_client_key_uq")
+      .on(t.venue_id, t.client_key)
+      .where(sql`${t.client_key} is not null`),
     index("orders_table_idx").on(t.table_id),
   ],
 );

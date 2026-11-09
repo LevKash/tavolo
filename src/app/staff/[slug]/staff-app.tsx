@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PinGate, apiPost, useAlertSounds, useBarPayload } from "@/components/bar-api";
+import { PinGate, apiPost, useAlertSounds, useBarPayload, useWakeLock } from "@/components/bar-api";
 import type { BarPayload } from "@/lib/types";
 import { cn, formatTableLabel, money, timeAgo } from "@/lib/util";
 
@@ -18,6 +18,7 @@ export default function StaffApp(props: {
   const [actionMsg, setActionMsg] = useState("");
   const [now, setNow] = useState(Date.now());
   const { data, unauthorized, error, refresh } = useBarPayload(slug, pin);
+  useWakeLock(Boolean(pin));
   // Sound for orders to confirm and waiter calls (repeats until answered).
   useAlertSounds(data, false);
 

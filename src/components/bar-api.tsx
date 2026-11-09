@@ -8,6 +8,7 @@ import { playChime } from "@/lib/util";
 export function useBarPayload(slug: string, pin: string | null) {
   const [data, setData] = useState<BarPayload | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [locked, setLocked] = useState(false);
   const [error, setError] = useState("");
   const [token, setToken] = useState(0);
 
@@ -22,11 +23,18 @@ export function useBarPayload(slug: string, pin: string | null) {
     let alive = true;
     const tick = async () => {
       try {
-        const res = await fetch(
-          `/api/bar/orders?slug=${encodeURIComponent(slug)}&pin=${encodeURIComponent(pin)}`,
-          { cache: "no-store" },
-        );
+        const res = await fetch(`/api/bar/orders?slug=${encodeURIComponent(slug)}`, {
+          cache: "no-store",
+          headers: { "x-bar-pin": pin },
+        });
         if (!res.ok) {
+          if (res.status === 429 && alive) {
+            // This device guessed wrong too often. Keep the PIN and the screen,
+            // and keep retrying: it clears by itself when the lock expires.
+            setLocked(true);
+            setError("Too many wrong PINs from this device. Retrying shortly…");
+            return;
+          }
           if (res.status === 401 && alive) {
             setUnauthorized(true);
             setData(null);
@@ -39,6 +47,7 @@ export function useBarPayload(slug: string, pin: string | null) {
         if (alive) {
           setData(j);
           setUnauthorized(false);
+          setLocked(false);
           setError("");
         }
       } catch {
@@ -53,7 +62,7 @@ export function useBarPayload(slug: string, pin: string | null) {
     };
   }, [slug, pin, token]);
 
-  return { data, unauthorized, error, refresh, invalidate };
+  return { data, unauthorized, locked, error, refresh, invalidate };
 }
 
 /**
@@ -102,6 +111,40 @@ export function useAlertSounds(data: BarPayload | null, includeQueue: boolean) {
   }, []);
 
   return fresh;
+}
+
+/**
+ * Keep the screen on while the bar/staff screen is open, so the phone does not
+ * lock and silence the alerts. Best effort: not every browser supports it.
+ */
+export function useWakeLock(active: boolean) {
+  useEffect(() => {
+    if (!active || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    let lock: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+    const request = async () => {
+      try {
+        const l = await (
+          navigator as unknown as { wakeLock: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> } }
+        ).wakeLock.request("screen");
+        if (cancelled) await l.release();
+        else lock = l;
+      } catch {
+        /* denied or unsupported */
+      }
+    };
+    void request();
+    // The lock is dropped when the tab is hidden; ask again on return.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void request();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      void lock?.release().catch(() => undefined);
+    };
+  }, [active]);
 }
 
 export async function apiPost(path: string, body: Record<string, unknown>) {

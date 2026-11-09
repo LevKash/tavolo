@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { waiterCalls } from "@/db/schema";
-import { checkBarAccess } from "@/lib/pin";
+import { barDenied, checkBarAccess } from "@/lib/pin";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +17,9 @@ export async function POST(
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "");
+  const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "", req);
   if (!venue) {
-    return NextResponse.json({ error: "Invalid venue or PIN" }, { status: 401 });
+    return barDenied(body.slug ?? "", req);
   }
   const res = await db
     .update(waiterCalls)

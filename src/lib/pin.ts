@@ -1,4 +1,6 @@
+import { NextResponse } from "next/server";
 import { getVenueBySlug } from "@/lib/core";
+import { clientIp } from "@/lib/rate-limit";
 import type { Venue } from "@/db/schema";
 
 /**
@@ -6,8 +8,9 @@ import type { Venue } from "@/db/schema";
  *
  * The PIN is the ONLY thing standing between a stranger and a venue's till
  * screen: with no throttle, 10 000 curl requests walk through every 4-digit
- * code. We keep a small in-memory ledger per (slug) and lock the venue out for
- * a while after repeated failures.
+ * code. We keep a small in-memory ledger per (venue, client address) and lock
+ * THAT client out for a while after repeated failures. Keying on the venue alone
+ * would let a stranger switch the bar off by guessing wrong five times.
  *
  * Scope note: serverless instances each keep their own map, so this brakes an
  * attacker per instance rather than globally. It raises the cost from "a few
@@ -33,19 +36,21 @@ function prune() {
   }
 }
 
-/** Seconds remaining on a lockout, or 0 when not locked. */
-export function pinLockRemaining(slug: string): number {
-  const b = buckets.get(slug);
+const bucketKey = (slug: string, req?: Request) => `${slug}|${req ? clientIp(req) : "-"}`;
+
+/** Seconds remaining on a lockout for this client, or 0 when not locked. */
+export function pinLockRemaining(slug: string, req?: Request): number {
+  const b = buckets.get(bucketKey(slug, req));
   if (!b) return 0;
   const left = b.lockedUntil - Date.now();
   return left > 0 ? Math.ceil(left / 1000) : 0;
 }
 
-function registerFail(slug: string) {
+function registerFail(key: string) {
   const now = Date.now();
-  const b = buckets.get(slug);
+  const b = buckets.get(key);
   if (!b || now - b.firstFailAt > WINDOW_MS) {
-    buckets.set(slug, { fails: 1, firstFailAt: now, lockedUntil: 0 });
+    buckets.set(key, { fails: 1, firstFailAt: now, lockedUntil: 0 });
     prune();
     return;
   }
@@ -57,8 +62,8 @@ function registerFail(slug: string) {
   }
 }
 
-function clearFails(slug: string) {
-  buckets.delete(slug);
+function clearFails(key: string) {
+  buckets.delete(key);
 }
 
 /**
@@ -68,15 +73,32 @@ function clearFails(slug: string) {
 export async function checkBarAccess(
   slug: string,
   pin: string,
+  req?: Request,
 ): Promise<Venue | null> {
   if (!slug || !pin) return null;
-  if (pinLockRemaining(slug) > 0) return null;
+  const key = bucketKey(slug, req);
+  if (pinLockRemaining(slug, req) > 0) return null;
   const venue = await getVenueBySlug(slug);
   if (!venue) return null;
   if (String(venue.bar_pin) !== String(pin).trim()) {
-    registerFail(slug);
+    registerFail(key);
     return null;
   }
-  clearFails(slug);
+  clearFails(key);
   return venue;
+}
+
+/**
+ * The response for a refused bar/staff request: 429 while THIS client is locked
+ * out (the screen keeps its PIN and retries), 401 for a wrong PIN.
+ */
+export function barDenied(slug: string, req?: Request): NextResponse {
+  const wait = pinLockRemaining(slug, req);
+  if (wait > 0) {
+    return NextResponse.json(
+      { error: "Too many wrong PINs. Try again later.", retryAfter: wait },
+      { status: 429, headers: { "Retry-After": String(wait) } },
+    );
+  }
+  return NextResponse.json({ error: "Invalid venue or PIN" }, { status: 401 });
 }
