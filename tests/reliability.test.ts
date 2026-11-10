@@ -122,7 +122,7 @@ describe("PIN lockout is per client, not per venue", () => {
     }
     // Even the right PIN is refused to the locked client, with a 429.
     expect(await checkBarAccess(f.venue.slug, "7391", stranger)).toBeNull();
-    expect(barDenied(f.venue.slug, stranger).status).toBe(429);
+    expect((await barDenied(f.venue.slug, stranger)).status).toBe(429);
 
     // The bartender on another connection is unaffected.
     const bartender = req("198.51.100.20");
@@ -133,7 +133,7 @@ describe("PIN lockout is per client, not per venue", () => {
     const f = await fixture("7391");
     const r = req("203.0.113.50");
     expect(await checkBarAccess(f.venue.slug, "1111", r)).toBeNull();
-    expect(barDenied(f.venue.slug, r).status).toBe(401);
+    expect((await barDenied(f.venue.slug, r)).status).toBe(401);
   });
 });
 

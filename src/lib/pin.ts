@@ -1,69 +1,42 @@
 import { NextResponse } from "next/server";
 import { getVenueBySlug } from "@/lib/core";
-import { clientIp } from "@/lib/rate-limit";
+import { clearLimit, clientIp, hitLimit, peekLimit } from "@/lib/rate-limit";
+import { notifyOperator } from "@/lib/tg";
 import type { Venue } from "@/db/schema";
 
 /**
- * Brute-force guard for the 4–6 digit staff PIN.
+ * Brute-force guard for the staff PIN.
  *
- * The PIN is the ONLY thing standing between a stranger and a venue's till
- * screen: with no throttle, 10 000 curl requests walk through every 4-digit
- * code. We keep a small in-memory ledger per (venue, client address) and lock
- * THAT client out for a while after repeated failures. Keying on the venue alone
- * would let a stranger switch the bar off by guessing wrong five times.
+ * The PIN is the only thing between a stranger and a venue's till screen, so
+ * wrong guesses are counted per (venue, client address) in the database: the
+ * count holds across serverless instances. After MAX_FAILS wrong PINs inside
+ * the window THAT client is refused until the window ends, even with the right
+ * PIN. Keying on the venue alone would let a stranger switch the bar off by
+ * guessing wrong five times.
  *
- * Scope note: serverless instances each keep their own map, so this brakes an
- * attacker per instance rather than globally. It raises the cost from "a few
- * seconds" to "hours of distributed guessing", which is the right trade for a
- * demo-scale app. A shared store (Upstash/Vercel KV) is the next step if a real
- * bar goes live.
+ * Wrong guesses are also counted per venue. That count never locks anyone out
+ * (it would be the same off-switch); it tells the operator that somebody is
+ * working through a venue's PINs from many addresses.
  */
-
-type Bucket = { fails: number; firstFailAt: number; lockedUntil: number };
-
 const MAX_FAILS = 5;
-const WINDOW_MS = 10 * 60 * 1000; // failures older than this are forgotten
-const LOCK_MS = 15 * 60 * 1000; // lockout after MAX_FAILS
-const MAX_BUCKETS = 5000;
+const WINDOW_MS = 15 * 60 * 1000;
+const VENUE_ALERT_FAILS = 40;
 
-const buckets = new Map<string, Bucket>();
-
-function prune() {
-  if (buckets.size <= MAX_BUCKETS) return;
-  const now = Date.now();
-  for (const [k, b] of buckets) {
-    if (b.lockedUntil < now && now - b.firstFailAt > WINDOW_MS) buckets.delete(k);
-  }
-}
-
-const bucketKey = (slug: string, req?: Request) => `${slug}|${req ? clientIp(req) : "-"}`;
+const clientKey = (slug: string, req?: Request) => `pin:${slug}:${req ? clientIp(req) : "-"}`;
 
 /** Seconds remaining on a lockout for this client, or 0 when not locked. */
-export function pinLockRemaining(slug: string, req?: Request): number {
-  const b = buckets.get(bucketKey(slug, req));
-  if (!b) return 0;
-  const left = b.lockedUntil - Date.now();
-  return left > 0 ? Math.ceil(left / 1000) : 0;
+export async function pinLockRemaining(slug: string, req?: Request): Promise<number> {
+  const s = await peekLimit(clientKey(slug, req), MAX_FAILS, WINDOW_MS);
+  return s.limited ? s.retryAfter : 0;
 }
 
-function registerFail(key: string) {
-  const now = Date.now();
-  const b = buckets.get(key);
-  if (!b || now - b.firstFailAt > WINDOW_MS) {
-    buckets.set(key, { fails: 1, firstFailAt: now, lockedUntil: 0 });
-    prune();
-    return;
+/** Constant-time comparison, so response timing says nothing about the PIN. */
+function samePin(a: string, b: string): boolean {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
-  b.fails += 1;
-  if (b.fails >= MAX_FAILS) {
-    b.lockedUntil = now + LOCK_MS;
-    b.fails = 0;
-    b.firstFailAt = now;
-  }
-}
-
-function clearFails(key: string) {
-  buckets.delete(key);
+  return diff === 0;
 }
 
 /**
@@ -75,25 +48,39 @@ export async function checkBarAccess(
   pin: string,
   req?: Request,
 ): Promise<Venue | null> {
-  if (!slug || !pin) return null;
-  const key = bucketKey(slug, req);
-  if (pinLockRemaining(slug, req) > 0) return null;
+  if (typeof slug !== "string" || typeof pin !== "string" || !slug || !pin) return null;
+  if (slug.length > 80 || pin.length > 12) return null;
+  const key = clientKey(slug, req);
+  const fails = await peekLimit(key, MAX_FAILS, WINDOW_MS);
+  if (fails.limited) return null;
   const venue = await getVenueBySlug(slug);
   if (!venue) return null;
-  if (String(venue.bar_pin) !== String(pin).trim()) {
-    registerFail(key);
+  if (!samePin(String(venue.bar_pin), pin.trim())) {
+    await hitLimit(key, MAX_FAILS, WINDOW_MS);
+    const all = await hitLimit(`pin-venue:${venue.id}`, VENUE_ALERT_FAILS, WINDOW_MS);
+    if (all.count === VENUE_ALERT_FAILS + 1) {
+      await notifyOperator(
+        `🔐 Ordavo: more than ${VENUE_ALERT_FAILS} wrong staff PINs for ${venue.name} in 15 minutes. Someone may be guessing it; consider changing the PIN.`,
+      );
+    }
     return null;
   }
-  clearFails(key);
+  // A correct PIN forgives earlier typos from this client.
+  if (fails.count > 0) await clearLimit(key);
   return venue;
+}
+
+/** Forget a client's wrong guesses (used by tests and after a PIN change). */
+export async function clearPinFails(slug: string, req?: Request): Promise<void> {
+  await clearLimit(clientKey(slug, req));
 }
 
 /**
  * The response for a refused bar/staff request: 429 while THIS client is locked
  * out (the screen keeps its PIN and retries), 401 for a wrong PIN.
  */
-export function barDenied(slug: string, req?: Request): NextResponse {
-  const wait = pinLockRemaining(slug, req);
+export async function barDenied(slug: string, req?: Request): Promise<NextResponse> {
+  const wait = await pinLockRemaining(typeof slug === "string" ? slug : "", req);
   if (wait > 0) {
     return NextResponse.json(
       { error: "Too many wrong PINs. Try again later.", retryAfter: wait },

@@ -3,6 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { tables, waiterCalls } from "@/db/schema";
 import { getVenueBySlug, openSessionForTable } from "@/lib/core";
+import { clientIp, isUuid, rateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -13,13 +14,20 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const slug = (body.slug ?? "").trim();
-  const tableId = body.tableId ?? "";
+  const slug = typeof body.slug === "string" ? body.slug.trim() : "";
+  const tableId = isUuid(body.tableId) ? body.tableId : "";
   if (!slug || !tableId) {
     return NextResponse.json(
       { error: "slug and tableId are required" },
       { status: 400 },
     );
+  }
+  // Guests on the venue's wifi share one address, so the limits are generous.
+  if (
+    rateLimited(`call:${tableId}`, 6, 60_000) ||
+    rateLimited(`call-ip:${clientIp(req)}`, 60, 60_000)
+  ) {
+    return NextResponse.json({ error: "too_many_requests" }, { status: 429 });
   }
   const venue = await getVenueBySlug(slug);
   if (!venue) {

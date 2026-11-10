@@ -1,6 +1,7 @@
 "use server";
 
 import { and, asc, count, eq, inArray, max, ne, sql } from "drizzle-orm";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
@@ -36,6 +37,7 @@ import {
   openSessionForTable,
   VENUE_PLANS,
 } from "@/lib/core";
+import { clearLimit, hitLimit, ipFromForwarded } from "@/lib/rate-limit";
 import { ensureSeeded } from "@/lib/seed";
 import { randomPin, siteUrl } from "@/lib/site";
 import { notifyOperator } from "@/lib/tg";
@@ -67,6 +69,24 @@ function errText(err: unknown): string {
   return "Something went wrong";
 }
 
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const TOO_MANY_LOGINS = "Too many attempts. Please wait 15 minutes and try again.";
+
+async function callerIp(): Promise<string> {
+  return ipFromForwarded((await headers()).get("x-forwarded-for"));
+}
+
+/**
+ * Password guessing brake, counted in the database so it holds across server
+ * instances: 8 attempts per account and 30 per address in 15 minutes. The
+ * per-account count is cleared by a successful login.
+ */
+async function loginThrottled(email: string): Promise<boolean> {
+  const byIp = await hitLimit(`login-ip:${await callerIp()}`, 30, LOGIN_WINDOW_MS);
+  const byEmail = await hitLimit(`login:${email}`, 8, LOGIN_WINDOW_MS);
+  return byIp.limited || byEmail.limited;
+}
+
 async function getOwnerVenue(): Promise<Venue> {
   const user = await requireUser();
   const rows = await db
@@ -91,11 +111,14 @@ export async function loginAction(input: {
   const email = (input.email ?? "").trim().toLowerCase();
   const password = input.password ?? "";
   if (!email || !password) return { error: "Enter your email and password." };
+  if (email.length > 200 || password.length > 200) return { error: "Wrong email or password." };
+  if (await loginThrottled(email)) return { error: TOO_MANY_LOGINS };
   const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
   const user = rows[0];
   if (!user || !(await verifyPassword(password, user.password_hash))) {
     return { error: "Wrong email or password." };
   }
+  await clearLimit(`login:${email}`);
   const token = await createSessionToken(user.id);
   await setSessionCookie(token);
   // Platform admins land in the panel; venue owners always go to their dashboard.
@@ -116,15 +139,16 @@ export async function adminLoginAction(input: {
   const email = (input.email ?? "").trim().toLowerCase();
   const password = input.password ?? "";
   if (!email || !password) return { error: "Enter your email and password." };
+  if (email.length > 200 || password.length > 200) return { error: "Invalid email or password." };
+  if (await loginThrottled(email)) return { error: TOO_MANY_LOGINS };
   const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
   const user = rows[0];
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
+  // One answer for a wrong password and for a correct password on a non-admin
+  // account, so this door does not confirm an owner's password to a guesser.
+  if (!user || !(await verifyPassword(password, user.password_hash)) || !user.is_admin) {
     return { error: "Invalid email or password." };
   }
-  if (!user.is_admin) {
-    // Valid credentials, wrong door: no session, no redirect.
-    return { error: "This account doesn't have admin access." };
-  }
+  await clearLimit(`login:${email}`);
   const token = await createSessionToken(user.id);
   await setSessionCookie(token);
   redirect("/admin");
@@ -145,7 +169,13 @@ export async function signupAction(input: {
   let slug = slugify(input.slug || venueName);
   if (!name) return { error: "Please enter your name." };
   if (!EMAIL_RE.test(email)) return { error: "Please enter a valid email." };
-  if (password.length < 6) return { error: "Password must be at least 6 characters." };
+  if (password.length < 10) return { error: "Password must be at least 10 characters." };
+  if (name.length > 120 || email.length > 200 || password.length > 200 || venueName.length > 120) {
+    return { error: "One of the fields is too long." };
+  }
+  if ((await hitLimit(`signup-ip:${await callerIp()}`, 5, 60 * 60 * 1000)).limited) {
+    return { error: "Too many sign-ups from this connection. Please try again in an hour." };
+  }
   if (!venueName) return { error: "Please name your venue." };
   if (!slug) return { error: "Please choose a URL slug for your venue." };
   if (slug === "ambrosia") return { error: "That slug is taken. Try another." };
@@ -586,22 +616,6 @@ export async function closeTableAction(tableId: string): Promise<ActionRes> {
   if (tbl.length === 0) return { error: "Table not found." };
   await closeTableSession(venue.id, tableId);
   revalidatePath("/dashboard/tables");
-  return { ok: true };
-}
-
-// ---------------------------------------------------------------- dashboard extras
-
-export async function purgeTableSessionsAction(tableId: string): Promise<ActionRes> {
-  const venue = await getOwnerVenue();
-  await db
-    .delete(tableSessions)
-    .where(
-      and(
-        eq(tableSessions.venue_id, venue.id),
-        eq(tableSessions.table_id, tableId),
-      ),
-    );
-  revalidatePath("/dashboard");
   return { ok: true };
 }
 

@@ -52,7 +52,11 @@ export default async function GuestMenuPage(props: {
       <main className="flex min-h-screen items-center justify-center px-6 text-center">
         <div>
           <p className="serif text-4xl font-semibold text-cream">{venue.name}</p>
-          <p className="mt-3 text-fog">This menu is currently offline. Please ask the staff.</p>
+          {/* Server component: the guest's language is not known here, so both. */}
+          <p lang="el" className="mt-3 text-fog">
+            Το μενού είναι προσωρινά εκτός λειτουργίας. Παρακαλούμε ρωτήστε το προσωπικό.
+          </p>
+          <p className="mt-2 text-fog">This menu is currently offline. Please ask the staff.</p>
         </div>
       </main>
     );

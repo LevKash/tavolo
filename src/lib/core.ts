@@ -36,6 +36,11 @@ import type {
 import { after } from "next/server";
 import { reconcileVenue } from "@/lib/payments";
 import { paymentsAllowed } from "@/lib/site";
+import {
+  FIRST_ORDER_SESSION_MAX_AGE_MS,
+  FIRST_ORDER_WINDOW_MS,
+  isPairDeal,
+} from "@/lib/promos";
 import { formatTableLabel, orderRef, startOfToday } from "@/lib/util";
 
 // ---------------------------------------------------------------- venue
@@ -60,6 +65,7 @@ export function toVenuePublic(v: Venue): VenuePublic {
     passportEnabled: v.passport_enabled,
     // Expose the flag only — never the credentials.
     paymentsEnabled: paymentsAllowed() && Boolean(v.payments_enabled),
+    promosEnabled: Boolean(v.promos_enabled),
   };
 }
 
@@ -469,6 +475,9 @@ export type GuestOrderHistory = {
  * - A session whose last order is older than 3 hours and that has nothing still
  *   waiting (pending_confirm / new / making, ignoring ones stuck for over 6 h) is
  *   closed, and its served orders are marked closed.
+ * - A session that still has accepted, UNPAID orders is an open tab: it stays for
+ *   12 hours after the last order (a beach-bar sitting lasts all afternoon), so
+ *   the bill does not vanish from the bar and from the guest's Pay button.
  * Runs at most once a minute per venue (it is called from the polled bar payload).
  */
 const lastExpiry = new Map<string, number>();
@@ -499,8 +508,15 @@ export async function expireIdleSessions(venueId: string): Promise<number> {
        and coalesce(
              (select max(o.created_at) from orders o where o.session_id = s.id),
              s.opened_at)
-           < now() - (case when exists (select 1 from orders o where o.session_id = s.id)
-                           then interval '3 hours' else interval '45 minutes' end)
+           < now() - (case
+                 when exists (select 1 from orders o
+                               where o.session_id = s.id
+                                 and o.status in ('new', 'making', 'served')
+                                 and o.payment_status <> 'paid')
+                   then interval '12 hours'
+                 when exists (select 1 from orders o where o.session_id = s.id)
+                   then interval '3 hours'
+                 else interval '45 minutes' end)
     returning s.id`);
   const ids = (res.rows as { id: string }[]).map((r) => r.id);
   if (ids.length > 0) {
@@ -984,11 +1000,23 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     }
 
     const venueFlags = await tx
-      .select({ passport_enabled: venues.passport_enabled })
+      .select({ passport_enabled: venues.passport_enabled, promos_enabled: venues.promos_enabled })
       .from(venues)
       .where(eq(venues.id, venueId))
       .limit(1);
     const passportEnabled = venueFlags[0]?.passport_enabled ?? false;
+    // Discounts exist only where the venue switched them on. Everywhere else a
+    // request that claims one is simply priced at full price.
+    const promosEnabled = venueFlags[0]?.promos_enabled ?? false;
+    /** -10% applies to a side only when its claimed drink is in this order AND is a real pair. */
+    const pairApplies = (itemId: string, pairOf?: string): boolean => {
+      if (!promosEnabled) return false;
+      const pairId = pairOf?.trim();
+      if (!pairId || pairId === itemId) return false;
+      const side = itemById.get(itemId);
+      const drink = itemById.get(pairId);
+      return Boolean(side && drink && isPairDeal(drink.name, side.name));
+    };
 
     const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
     if (itemIds.length === 0) throw new Error("empty_order");
@@ -1016,14 +1044,13 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     const orderId = crypto.randomUUID();
     for (const l of input.lines) {
       const item = itemById.get(l.itemId)!;
-      if (!Number.isFinite(l.qty) || l.qty < 1 || l.qty > 20) {
+      if (!Number.isInteger(l.qty) || l.qty < 1 || l.qty > 20) {
         throw new Error("bad_qty");
       }
       // Pair deal: a line flagged pairOf gets −10% when its pair item is part
       // of the same order. Priced server-side from the DB (client prices are
       // never trusted) so UI and receipt always agree.
-      const pairId = l.pairOf?.trim();
-      const isPair = !!pairId && pairId !== l.itemId && itemById.has(pairId);
+      const isPair = pairApplies(l.itemId, l.pairOf);
       const unit = isPair
         ? Math.round(item.price * 0.9 * 100) / 100
         : item.price;
@@ -1082,9 +1109,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
           input.lines.forEach((l, lIdx) => {
             if (!isCocktailLine(l.itemId) || !(l.qty > 0)) return;
             const item = itemById.get(l.itemId)!;
-            const pairId = l.pairOf?.trim();
-            const isPair =
-              !!pairId && pairId !== l.itemId && itemById.has(pairId);
+            const isPair = pairApplies(l.itemId, l.pairOf);
             const unit = isPair
               ? Math.round(item.price * 0.9 * 100) / 100
               : item.price;
@@ -1161,12 +1186,16 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     // and the first-order rule, so the client can never self-serve it).
     const nowMs = Date.now();
     const firstSeenAt = input.firstSeenAt;
+    // The client's clock alone proves nothing, so the sitting itself must also
+    // be fresh: the server opened it when the QR was scanned.
     const firstOrderBonus =
+      promosEnabled &&
       !trusted &&
       typeof firstSeenAt === "number" &&
       Number.isFinite(firstSeenAt) &&
       firstSeenAt - nowMs <= 60_000 && // client clock may run a little ahead
-      nowMs - firstSeenAt <= 5 * 60_000;
+      nowMs - firstSeenAt <= FIRST_ORDER_WINDOW_MS &&
+      nowMs - session.opened_at.getTime() <= FIRST_ORDER_SESSION_MAX_AGE_MS;
     if (firstOrderBonus) {
       total = Math.round(total * 0.9 * 100) / 100;
     }

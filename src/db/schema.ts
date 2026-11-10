@@ -76,6 +76,9 @@ export const venues = pgTable(
   // archived = soft-deleted by a platform admin (rows/orders/sessions stay intact).
   status: text("status").notNull().default("active"),
   passport_enabled: boolean("passport_enabled").notNull().default(false),
+  // Pair deals (-10%) and the first-order welcome deal (-10%). Off unless the
+  // venue asked for them: a discount must never be a surprise to the owner.
+  promos_enabled: boolean("promos_enabled").notNull().default(false),
   // --- payments (pay-at-table via the venue's own Viva Wallet merchant) ---
   // Off by default: a venue must paste its own credentials before guests see a Pay button.
   payments_enabled: boolean("payments_enabled").notNull().default(false),
@@ -457,4 +460,20 @@ export const paymentEvents = pgTable(
     detail: text("detail").notNull().default(""),
   },
   (t) => [index("payment_events_received_idx").on(t.received_at)],
+);
+
+/**
+ * Fixed-window counters for rate limits that must hold across serverless
+ * instances (logins, PIN guesses, orders per table). See src/lib/rate-limit.ts.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    key: text("key").primaryKey(),
+    count: integer("count").notNull().default(0),
+    window_start: timestamp("window_start", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("rate_limits_window_idx").on(t.window_start)],
 );

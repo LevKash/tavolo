@@ -37,18 +37,19 @@ export function clock(d: Date | string | number) {
 }
 
 /** "2 min ago" / "3 h ago" relative time. */
-export function timeAgo(iso: string | Date, nowMs = Date.now()) {
+export function timeAgo(iso: string | Date, nowMs = Date.now(), lang: "en" | "el" = "en") {
   const then = new Date(iso).getTime();
   const diff = Math.max(0, nowMs - then);
   const sec = Math.floor(diff / 1000);
-  if (sec < 10) return "just now";
-  if (sec < 60) return `${sec}s ago`;
+  const el = lang === "el";
+  if (sec < 10) return el ? "μόλις τώρα" : "just now";
+  if (sec < 60) return el ? `πριν από ${sec} δευτ.` : `${sec}s ago`;
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} min ago`;
+  if (min < 60) return el ? `πριν από ${min} λεπτά` : `${min} min ago`;
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h} h ago`;
+  if (h < 24) return el ? `πριν από ${h} ώρ.` : `${h} h ago`;
   const d = Math.floor(h / 24);
-  return `${d} d ago`;
+  return el ? `πριν από ${d} ημ.` : `${d} d ago`;
 }
 
 /** Short human ref for an order, derived from its uuid. */
@@ -135,24 +136,80 @@ export function allergenEmoji(code: string) {
   return map[code.toLowerCase()] ?? "•";
 }
 
-/** WebAudio chime used for new bar orders. Safe no-op when unavailable. */
-export function playChime() {
+type AudioCtor = typeof AudioContext;
+/** One shared context for the whole page: browsers only let a context that was
+ * started from a user gesture make sound, so it must be reused, not recreated. */
+let sharedAudio: AudioContext | null = null;
+let chimeWaiting = false;
+
+function audioCtor(): AudioCtor | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext
+  );
+}
+
+/**
+ * Create/resume the shared AudioContext. Call from a user gesture (tap, click,
+ * form submit): after that, chimes can play without further interaction.
+ */
+export function unlockAudio() {
   try {
-    const Ctx =
-      typeof window !== "undefined"
-        ? window.AudioContext ??
-          (window as unknown as { webkitAudioContext?: typeof AudioContext })
-            .webkitAudioContext
-        : undefined;
-    if (!Ctx) return;
-    const ctx = new Ctx();
+    if (!sharedAudio || sharedAudio.state === "closed") {
+      const Ctx = audioCtor();
+      if (!Ctx) return;
+      sharedAudio = new Ctx();
+    }
+    if (sharedAudio.state !== "running") void sharedAudio.resume().catch(() => undefined);
+  } catch {
+    /* audio unavailable */
+  }
+}
+
+/** True when the shared context exists and is allowed to make sound. */
+export function audioReady() {
+  return sharedAudio !== null && sharedAudio.state === "running";
+}
+
+/**
+ * WebAudio chime. "soft" is the short two-note guest chime; "alert" is the loud
+ * four-note (~1 s) staff alert meant to cut through a noisy bar.
+ * Safe no-op when audio is unavailable or not unlocked yet.
+ */
+export function playChime(variant: "soft" | "alert" = "soft") {
+  try {
+    if (!sharedAudio || sharedAudio.state === "closed") {
+      const Ctx = audioCtor();
+      if (!Ctx) return;
+      sharedAudio = new Ctx();
+    }
+    const ctx = sharedAudio;
+    if (ctx.state !== "running") {
+      // Blocked until a user gesture. Keep at most ONE chime waiting, so a
+      // backlog of alerts does not blast all at once when sound is unlocked.
+      if (chimeWaiting) return;
+      chimeWaiting = true;
+      void ctx
+        .resume()
+        .then(() => {
+          chimeWaiting = false;
+          if (ctx.state === "running") playChime(variant);
+        })
+        .catch(() => {
+          chimeWaiting = false;
+        });
+      return;
+    }
+    const loud = variant === "alert";
+    const peak = loud ? 0.5 : 0.18;
     const play = (freq: number, t0: number, dur: number) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = "sine";
+      osc.type = loud ? "triangle" : "sine";
       osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.0001, ctx.currentTime + t0);
-      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(peak, ctx.currentTime + t0 + 0.02);
       gain.gain.exponentialRampToValueAtTime(
         0.0001,
         ctx.currentTime + t0 + dur,
@@ -161,9 +218,16 @@ export function playChime() {
       osc.start(ctx.currentTime + t0);
       osc.stop(ctx.currentTime + t0 + dur + 0.05);
     };
-    play(880, 0, 0.28);
-    play(1174.66, 0.16, 0.4);
-    window.setTimeout(() => ctx.close().catch(() => undefined), 1200);
+    if (loud) {
+      // Notes do not overlap, so the 0.5 peak never sums into clipping.
+      play(880, 0, 0.24);
+      play(1174.66, 0.25, 0.24);
+      play(880, 0.5, 0.24);
+      play(1174.66, 0.75, 0.3);
+    } else {
+      play(880, 0, 0.28);
+      play(1174.66, 0.16, 0.4);
+    }
   } catch {
     /* audio unavailable */
   }

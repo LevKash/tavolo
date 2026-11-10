@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import type {
@@ -23,6 +24,7 @@ import {
   playChime,
   timeAgo,
 } from "@/lib/util";
+import { FIRST_ORDER_WINDOW_MS, PAIR_MAP } from "@/lib/promos";
 
 interface GuestAppProps {
   menu: MenuPublic;
@@ -30,23 +32,6 @@ interface GuestAppProps {
 }
 
 const CAT_ANCHOR = "cat";
-
-/**
- * Upsell pair deals: drinks keyed by English name → mezze/sides they pair
- * with at −10% (the discount is applied server-side via pairOf when the
- * drink is in the same order). Matched by English item.name.
- */
-const PAIR_MAP: Record<string, string[]> = {
-  "Ambrosia Sour": ["Truffle Fries", "Olives & Rusks"],
-  "Nectar Negroni": ["Truffle Fries", "Pastitsio Croquettes"],
-  "Golden Daiquiri": ["Pastitsio Croquettes", "Olives & Rusks"],
-  "Espresso Martini": ["Truffle Fries"],
-  "Olympic Fizz": ["Olives & Rusks"],
-  "Old Fashioned": ["Pastitsio Croquettes"],
-  "Xinomavro Naoussa": ["Meze Platter", "Olives & Rusks"],
-  "Assyrtiko Santorini": ["Meze Platter"],
-  "Virgin Spritz": ["Olives & Rusks"],
-};
 
 /** Server truth for "what have I ordered on this phone" — see /api/guest/orders. */
 type GuestOrderHistoryView = {
@@ -61,9 +46,9 @@ type GuestOrderHistoryView = {
   total: number;
 };
 const PAIR_DISCOUNT = 0.9;
-/** First-order welcome deal window: −10% if the guest orders within 5 min
- *  of first opening the menu. Server enforces; client mirrors for the UI. */
-const FIRST_ORDER_MS = 5 * 60_000;
+/** First-order welcome deal: −10% if the guest orders within
+ *  FIRST_ORDER_WINDOW_MS of first opening the menu. Server enforces; the
+ *  client only mirrors it for the UI (and only when the venue runs promos). */
 const FIRST_ORDER_DISCOUNT = 0.9;
 /** Cocktail passport: every 10th cocktail unit is free. Banked
  *  server-side per guest (a per-venue UUID in localStorage); the client
@@ -72,10 +57,123 @@ const PASSPORT_EVERY = 10;
 const GUEST_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PASSPORT_KEY = (slug: string) => `ordavo:pp:${slug}`;
+const CART_KEY = (slug: string, tableId: string) => `ordavo:cart:${slug}:${tableId}`;
+const ORDER_KEY = (slug: string, tableId: string) => `ordavo:order:${slug}:${tableId}`;
+const ORDER_DONE = ["served", "closed", "declined"];
 
-export default function GuestApp({ menu, table }: GuestAppProps) {
+/* ── Guest language: remembered in localStorage, else the phone's language. ──
+ * Read through useSyncExternalStore so the server render ("en") and the first
+ * client render agree, and the stored choice applies right after hydration. */
+const LANG_KEY = "ordavo:lang";
+let langOverride: Lang | null = null;
+const langListeners = new Set<() => void>();
+function subscribeLang(cb: () => void) {
+  langListeners.add(cb);
+  return () => {
+    langListeners.delete(cb);
+  };
+}
+function readLang(): Lang {
+  if (langOverride) return langOverride;
+  try {
+    const saved = localStorage.getItem(LANG_KEY);
+    if (saved === "el" || saved === "en") return saved;
+  } catch {
+    /* storage unavailable — fall back to the phone's language */
+  }
+  return typeof navigator !== "undefined" &&
+    (navigator.language ?? "").toLowerCase().startsWith("el")
+    ? "el"
+    : "en";
+}
+function serverLang(): Lang {
+  return "en";
+}
+function writeLang(l: Lang) {
+  langOverride = l;
+  try {
+    localStorage.setItem(LANG_KEY, l);
+  } catch {
+    /* ignore */
+  }
+  langListeners.forEach((cb) => cb());
+}
+
+/** "12" → "Table 12" / "Τραπέζι 12"; named tables stay as they are. */
+function tableText(label: string, lang: Lang) {
+  if (lang === "el") {
+    if (/^\d+$/.test(label)) return `Τραπέζι ${label}`;
+    if (label.toLowerCase() === "bar") return "Μπαρ";
+  }
+  return formatTableLabel(label);
+}
+
+/** Thrown for failures we already translated for the guest. */
+class GuestError extends Error {}
+
+/** Guest-facing text for a failed POST /api/order (never the server's English). */
+function orderErrorText(status: number, lang: Lang) {
+  const el = lang === "el";
+  if (status === 400)
+    return el
+      ? "Η παραγγελία δεν μπορεί να σταλεί όπως είναι. Ελέγξτε την και δοκιμάστε ξανά."
+      : "This order can't be sent as it is. Please check it and try again.";
+  if (status === 403)
+    return el
+      ? "Το μενού είναι προσωρινά εκτός λειτουργίας. Παρακαλούμε ρωτήστε το προσωπικό."
+      : "The menu is offline right now. Please ask the staff.";
+  if (status === 404)
+    return el
+      ? "Δεν βρέθηκε το τραπέζι. Σαρώστε ξανά τον κωδικό QR στο τραπέζι σας."
+      : "Table not found. Please scan the QR code on your table again.";
+  if (status === 429)
+    return el
+      ? "Πάρα πολλές προσπάθειες. Περιμένετε λίγο και δοκιμάστε ξανά."
+      : "Too many attempts. Please wait a moment and try again.";
+  return el
+    ? "Η παραγγελία δεν στάλθηκε. Παρακαλούμε δοκιμάστε ξανά."
+    : "Could not place the order. Please try again.";
+}
+
+/** Guest-facing text for a failed POST /api/pay/session. */
+function payErrorText(status: number, code: string, lang: Lang) {
+  const el = lang === "el";
+  if (code === "nothing_to_pay")
+    return el
+      ? "Δεν υπάρχει κάτι προς πληρωμή αυτή τη στιγμή. Οι παραγγελίες πληρώνονται αφού τις αποδεχτεί το μπαρ."
+      : "Nothing to pay right now. Orders can be paid once the bar has accepted them.";
+  if (code === "payments_not_configured" || code === "payments_disabled")
+    return el
+      ? "Η πληρωμή με κάρτα δεν είναι διαθέσιμη σε αυτό το κατάστημα."
+      : "Card payment is not available at this venue.";
+  if (code === "payment_in_progress")
+    return el
+      ? "Μια πληρωμή ετοιμάζεται ήδη. Περιμένετε λίγο και δοκιμάστε ξανά."
+      : "A payment is already being prepared. Please wait a moment and try again.";
+  if (code === "payment_provider_error" || status === 502)
+    return el
+      ? "Η υπηρεσία πληρωμών δεν ανταποκρίθηκε. Παρακαλούμε δοκιμάστε ξανά."
+      : "The payment service did not answer. Please try again.";
+  if (status === 429 || code === "too_many_requests")
+    return el
+      ? "Πάρα πολλές προσπάθειες. Περιμένετε λίγο και δοκιμάστε ξανά."
+      : "Too many attempts. Please wait a moment and try again.";
+  return el
+    ? "Η πληρωμή δεν μπόρεσε να ξεκινήσει. Δοκιμάστε ξανά ή ρωτήστε το προσωπικό."
+    : "Payment could not be started. Try again or ask the staff.";
+}
+
+export default function GuestApp({ menu: initialMenu, table }: GuestAppProps) {
+  // The menu is state so a "sold out" answer can refresh it in place.
+  const [menu, setMenu] = useState<MenuPublic>(initialMenu);
   const venue = menu.venue;
-  const [lang, setLang] = useState<Lang>("en");
+  const promos = venue.promosEnabled === true;
+  const lang = useSyncExternalStore(subscribeLang, readLang, serverLang);
+  const setLang = writeLang;
+  // Keeps <html lang> right, so CSS uppercase drops Greek accents correctly.
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
   const [query, setQuery] = useState("");
   const [activeCat, setActiveCat] = useState<string | null>(
     menu.categories[0]?.id ?? null,
@@ -115,6 +213,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   const [history, setHistory] = useState<GuestOrderHistoryView | null>(null);
   const [passport, setPassport] = useState<PassportView | null>(null);
   const [placedOnce, setPlacedOnce] = useState(false);
+  // Id of the order the server said got the first-order −10% (receipt label).
+  const [firstDealOrderId, setFirstDealOrderId] = useState("");
+  // True once the saved cart was read back — nothing is written before that.
+  const [cartReady, setCartReady] = useState(false);
+  const tableKey = table?.id ?? "none";
   // ── First-order deal: −10% within 5 min of opening the menu ──
   const [firstSeenMs] = useState<number>(() => {
     const key = `ordavo:fs:${venue.slug}:${table?.id ?? ""}`;
@@ -133,8 +236,8 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     return now;
   });
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const fsLeft = Math.max(0, firstSeenMs + FIRST_ORDER_MS - nowMs);
-  const firstDeal = !!table && !placedOnce && fsLeft > 0;
+  const fsLeft = Math.max(0, firstSeenMs + FIRST_ORDER_WINDOW_MS - nowMs);
+  const firstDeal = promos && !!table && !placedOnce && fsLeft > 0;
   // Tick only while the countdown can actually change something visible.
   useEffect(() => {
     if (!firstDeal) return;
@@ -242,11 +345,23 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   // Pair-ups for a drink — resolved to real menu items by English name.
   const pairsOf = useCallback(
     (it: ItemPublic): ItemPublic[] =>
-      (PAIR_MAP[it.name] ?? [])
-        .map((n) => itemByName.get(n))
-        .filter((x): x is ItemPublic => !!x),
-    [itemByName],
+      promos
+        ? (PAIR_MAP[it.name] ?? [])
+            .map((n) => itemByName.get(n))
+            .filter((x): x is ItemPublic => !!x)
+        : [],
+    [itemByName, promos],
   );
+
+  // The wheel spins over drinks only; if the venue has none, over everything.
+  const wheelItems = useMemo(() => {
+    const available = items.filter((i) => i.isAvailable);
+    const drinks = available.filter((i) => {
+      const kind = kindByItem.get(i.id);
+      return kind === "cocktail" || kind === "zero";
+    });
+    return drinks.length > 0 ? drinks : available;
+  }, [items, kindByItem]);
 
   const q = query.trim().toLowerCase();
   const filteredCats = useMemo(() => {
@@ -270,10 +385,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   // matches the server rule (pairOf is only sent / honoured in that case).
   const pairActive = useCallback(
     (id: string) => {
+      if (!promos) return false;
       const mainId = cartPairs[id];
       return !!mainId && mainId !== id && !!itemById.get(mainId) && (cart[mainId] ?? 0) > 0;
     },
-    [cartPairs, cart, itemById],
+    [cartPairs, cart, itemById, promos],
   );
   const pairUnitPrice = useCallback(
     (it: ItemPublic) =>
@@ -283,7 +399,10 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     [pairActive],
   );
   const cartTotal = Object.entries(cart).reduce(
-    (sum, [id, qt]) => sum + pairUnitPrice(itemById.get(id) as ItemPublic) * qt,
+    (sum, [id, qt]) => {
+      const it = itemById.get(id);
+      return it ? sum + pairUnitPrice(it) * qt : sum;
+    },
     0,
   );
   // Mirrors the server's first-order −10% for the cart UI only.
@@ -309,6 +428,126 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     window.setTimeout(() => setToast(""), 2600);
   }, []);
 
+  /* ── Cart survives a reload / iOS tab discard (sessionStorage). ── */
+  useEffect(() => {
+    // Deferred a tick: reading storage must not set state inside the effect body.
+    const t = window.setTimeout(() => {
+      try {
+        const raw = sessionStorage.getItem(CART_KEY(venue.slug, tableKey));
+        const saved = raw
+          ? (JSON.parse(raw) as {
+              cart?: Record<string, unknown>;
+              pairs?: Record<string, unknown>;
+              note?: unknown;
+            })
+          : null;
+        if (saved && typeof saved === "object") {
+          const ok = new Map(
+            initialMenu.categories
+              .flatMap((c) => c.items)
+              .filter((i) => i.isAvailable)
+              .map((i) => [i.id, i] as const),
+          );
+          const nextCart: Record<string, number> = {};
+          for (const [id, v] of Object.entries(saved.cart ?? {})) {
+            const qty = Math.floor(Number(v));
+            if (ok.has(id) && qty > 0) nextCart[id] = Math.min(20, qty);
+          }
+          const nextPairs: Record<string, string> = {};
+          for (const [side, main] of Object.entries(saved.pairs ?? {})) {
+            if (typeof main === "string" && nextCart[side] && nextCart[main])
+              nextPairs[side] = main;
+          }
+          if (Object.keys(nextCart).length > 0) {
+            setCart(nextCart);
+            setCartPairs(nextPairs);
+          }
+          if (typeof saved.note === "string") setNote(saved.note.slice(0, 200));
+        }
+      } catch {
+        /* storage unavailable or corrupt — start with an empty cart */
+      }
+      setCartReady(true);
+    }, 0);
+    return () => window.clearTimeout(t);
+    // In practice once per mount: these only change if the page itself is re-served.
+  }, [initialMenu, venue.slug, tableKey]);
+  useEffect(() => {
+    if (!cartReady) return;
+    try {
+      const key = CART_KEY(venue.slug, tableKey);
+      if (Object.keys(cart).length === 0 && !note) sessionStorage.removeItem(key);
+      else sessionStorage.setItem(key, JSON.stringify({ cart, pairs: cartPairs, note }));
+    } catch {
+      /* ignore */
+    }
+  }, [cartReady, cart, cartPairs, note, venue.slug, tableKey]);
+
+  // A reload returns to the status screen of an order that is still running.
+  useEffect(() => {
+    if (!table) return;
+    const key = ORDER_KEY(venue.slug, table.id);
+    let id = "";
+    try {
+      id = sessionStorage.getItem(key) ?? "";
+    } catch {
+      /* storage unavailable */
+    }
+    if (!id) return;
+    let alive = true;
+    fetch(`/api/orders/${encodeURIComponent(id)}`)
+      .then((r) => (r.ok ? r.json() : r.status === 404 ? { order: null } : undefined))
+      .then((data: { order?: OrderView | null } | undefined) => {
+        if (!alive || !data) return; // offline / server error: keep the id for next time
+        if (data.order && !ORDER_DONE.includes(data.order.status)) {
+          const restored = data.order;
+          setTracked((prev) => prev ?? restored);
+        } else {
+          try {
+            sessionStorage.removeItem(key);
+          } catch {
+            /* ignore */
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [table, venue.slug]);
+
+  /** Re-read the menu in place (after a "sold out" answer) and drop cart lines
+   *  that can no longer be ordered. Returns false when the menu could not be loaded. */
+  async function refreshMenu() {
+    try {
+      const res = await fetch(`/api/menu/${encodeURIComponent(venue.slug)}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return false;
+      const fresh = (await res.json()) as MenuPublic;
+      if (!fresh || !fresh.venue || !Array.isArray(fresh.categories)) return false;
+      const ok = new Set(
+        fresh.categories
+          .flatMap((c) => c.items)
+          .filter((i) => i.isAvailable)
+          .map((i) => i.id),
+      );
+      setMenu(fresh);
+      setCart((c) =>
+        Object.fromEntries(Object.entries(c).filter(([id]) => ok.has(id))),
+      );
+      setCartPairs((p) =>
+        Object.fromEntries(
+          Object.entries(p).filter(([side, main]) => ok.has(side) && ok.has(main)),
+        ),
+      );
+      setSheetItem(null);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Track the latest order with a 3s poll.
   const trackedRef = useRef<string | null>(null);
   trackedRef.current = tracked?.id ?? null;
@@ -327,24 +566,29 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               ? prev
               : data.order,
           );
-          if (
-            data.order.status === "new" ||
-            data.order.status === "making"
-          ) {
-            // no-op; keeps polling until served/closed
+          if (ORDER_DONE.includes(data.order.status)) {
+            // Finished: stop polling and forget the saved order id.
+            window.clearInterval(iv);
+            if (table) {
+              try {
+                sessionStorage.removeItem(ORDER_KEY(venue.slug, table.id));
+              } catch {
+                /* ignore */
+              }
+            }
           }
         }
       } catch {
         /* transient */
       }
     };
-    tick();
     const iv = window.setInterval(tick, 3000);
+    tick();
     return () => {
       alive = false;
       window.clearInterval(iv);
     };
-  }, [tracked?.id]);
+  }, [tracked?.id, table, venue.slug]);
 
   function scrollToCategory(id: string) {
     setActiveCat(id);
@@ -374,7 +618,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
   function addToCart(item: ItemPublic, qty: number) {
     setCart((c) => ({ ...c, [item.id]: Math.min(20, (c[item.id] ?? 0) + qty) }));
     setSheetItem(null);
-    showToast(`${tName(item)} added`);
+    showToast(lang === "el" ? `${tName(item)} προστέθηκε` : `${tName(item)} added`);
   }
 
   function addPair(main: ItemPublic, side: ItemPublic, mainQty = 1) {
@@ -391,7 +635,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     });
     setCartPairs((p) => ({ ...p, [side.id]: main.id }));
     setSheetItem(null);
-    showToast(`${tName(side)} −10% with ${tName(main)}`);
+    showToast(
+      lang === "el"
+        ? `${tName(side)} −10% μαζί με ${tName(main)}`
+        : `${tName(side)} −10% with ${tName(main)}`,
+    );
   }
 
   // Drop the pair link when either side leaves the cart — mirrors the
@@ -445,22 +693,50 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
     setSending(true);
     setErrorBanner("");
     try {
-      const res = await fetch("/api/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          slug: venue.slug,
-          tableId: table.id,
-          lines,
-          note,
-          source,
-          firstSeenAt: firstSeenMs,
-          guestId: guestId || undefined,
-          clientKey: keyFor(lines, note, source),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Order failed");
+      let res: Response;
+      try {
+        res = await fetch("/api/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slug: venue.slug,
+            tableId: table.id,
+            lines,
+            note,
+            source,
+            firstSeenAt: firstSeenMs,
+            guestId: guestId || undefined,
+            clientKey: keyFor(lines, note, source),
+          }),
+        });
+      } catch {
+        // Offline / request never completed. The cart and the idempotency key
+        // are untouched, so tapping Send again retries the SAME order.
+        throw new GuestError(
+          lang === "el"
+            ? "Δεν υπάρχει σύνδεση. Η παραγγελία σας είναι ακόμα εδώ — πατήστε ξανά «Αποστολή»."
+            : "No connection. Your order is still here — tap Send again.",
+        );
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // "Sold out" (item_unavailable): refresh the menu and the cart in place
+        // instead of asking the guest to reload the page.
+        if (res.status === 400 && /sold out|unavailable/i.test(String(data.error ?? ""))) {
+          const refreshed = await refreshMenu();
+          throw new GuestError(
+            refreshed
+              ? lang === "el"
+                ? "Κάποιο προϊόν μόλις εξαντλήθηκε. Ενημερώσαμε το μενού και την παραγγελία σας — ελέγξτε την και στείλτε την ξανά."
+                : "An item just sold out. We updated the menu and your order — please check it and send again."
+              : lang === "el"
+                ? "Κάποιο προϊόν μόλις εξαντλήθηκε. Αφαιρέστε το από την παραγγελία σας και δοκιμάστε ξανά."
+                : "An item just sold out. Remove it from your order and try again.",
+          );
+        }
+        throw new GuestError(orderErrorText(res.status, lang));
+      }
+      if (!data.order) throw new GuestError(orderErrorText(500, lang));
       submitKey.current = null; // sent: the next order is a new one
       // The order is now on the server with this device's guest_id — pull the
       // fresh history so "your orders" shows it immediately.
@@ -471,6 +747,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         status: OrderView["status"];
         total: number;
         isFirstOfSession: boolean;
+        firstOrderDiscount?: boolean;
+        freeGranted?: number;
+        passport?: PassportView | null;
         createdAt: string;
       };
       const view: OrderView = {
@@ -494,18 +773,23 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
           m[l.itemId] = (m[l.itemId] ?? 0) + l.qty;
           return m;
         }, {}),
-      ).map(([id, qty]) => {
-        const it = itemById.get(id)!;
-        return {
-          itemId: id,
-          name: it.name,
-          unit: pairActive(id)
-            ? Math.round(it.price * PAIR_DISCOUNT * 100) / 100
-            : it.price,
-          qty,
-        };
+      ).flatMap(([id, qty]) => {
+        const it = itemById.get(id);
+        if (!it) return [];
+        return [
+          {
+            itemId: id,
+            name: it.name,
+            unit: pairActive(id)
+              ? Math.round(it.price * PAIR_DISCOUNT * 100) / 100
+              : it.price,
+            qty,
+          },
+        ];
       });
-      const freeGranted = (data as { freeGranted?: number }).freeGranted ?? 0;
+      // The server nests these under `order`; older responses had them at the top level.
+      const freeGranted =
+        minimal.freeGranted ?? (data as { freeGranted?: number }).freeGranted ?? 0;
       if (freeGranted > 0) {
         const units: { li: number; unit: number }[] = [];
         paid.forEach((l, li) => {
@@ -541,19 +825,29 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
           qty: l.qty,
         }));
       }
-      const snap = (data as { passport?: PassportView | null }).passport ?? null;
+      const snap =
+        minimal.passport ?? (data as { passport?: PassportView | null }).passport ?? null;
       if (snap) setPassport(snap);
+      setFirstDealOrderId(minimal.firstOrderDiscount ? minimal.id : "");
       setCart({});
       setCartPairs({});
       setNote("");
+      try {
+        sessionStorage.removeItem(CART_KEY(venue.slug, table.id));
+        sessionStorage.setItem(ORDER_KEY(venue.slug, table.id), minimal.id);
+      } catch {
+        /* ignore */
+      }
       setCartOpen(false);
       setTracked(view);
       setPlacedOnce(true);
       playChime();
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      setErrorBanner((err as Error).message);
-      showToast((err as Error).message);
+      const msg =
+        err instanceof GuestError ? err.message : orderErrorText(500, lang);
+      setErrorBanner(msg);
+      showToast(msg);
     } finally {
       setSending(false);
     }
@@ -569,10 +863,10 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
       });
       if (!res.ok) throw new Error("Call failed");
       setCallState("sent");
-      showToast("The waiter has been called ✨");
+      showToast(lang === "el" ? "Ο σερβιτόρος ειδοποιήθηκε ✨" : "The waiter has been called ✨");
       window.setTimeout(() => setCallState("idle"), 45000);
     } catch {
-      showToast("Could not reach the staff — please wave!");
+      showToast(lang === "el" ? "Δεν φτάσαμε στο προσωπικό — κάντε νόημα!" : "Could not reach the staff — please wave!");
     }
   }
 
@@ -588,17 +882,26 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
       const res = await fetch("/api/pay/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug: venue.slug, tableId: table.id }),
+        body: JSON.stringify({ slug: venue.slug, tableId: table.id, lang }),
       });
-      const data = (await res.json()) as { checkoutUrl?: string; error?: string; message?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        checkoutUrl?: string;
+        error?: string;
+      };
       if (!res.ok || !data.checkoutUrl) {
-        throw new Error(data.message ?? data.error ?? "Payment could not be started");
+        throw new GuestError(payErrorText(res.status, data.error ?? "", lang));
       }
       // Full navigation (not window.open) — Viva's checkout is the top-level flow
       // and returns the guest to /m/<slug>?table=<id>&paid=1.
       window.location.href = data.checkoutUrl;
     } catch (err) {
-      showToast((err as Error).message);
+      showToast(
+        err instanceof GuestError
+          ? err.message
+          : lang === "el"
+            ? "Δεν υπάρχει σύνδεση. Ελέγξτε το δίκτυό σας και δοκιμάστε ξανά."
+            : "No connection. Check your network and try again.",
+      );
       setPaying(false);
     }
   }
@@ -696,14 +999,17 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
       cancelled = true;
       window.clearInterval(iv);
     };
-  }, [table, venue.slug, venue.paymentsEnabled]);
+  // Re-read the bill whenever the tracked order changes state (e.g. the bar accepted
+  // it), so the Pay button shows the real amount at once instead of after the next tick.
+  }, [table, venue.slug, venue.paymentsEnabled, tracked?.status]);
 
   if (tracked) {
     return (
       <OrderScreen
         order={tracked}
         lang={lang}
-        tableLabel={formatTableLabel(table?.label ?? "")}
+        tableLabel={tableText(table?.label ?? "", lang)}
+        firstOrderDeal={firstDealOrderId === tracked.id}
         onBack={() => setTracked(null)}
         onCall={callWaiter}
         callState={callState}
@@ -725,7 +1031,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
 
       {/* header */}
       <header className="sticky top-0 z-30 border-b border-line/70 bg-ink/85 backdrop-blur-xl">
-        <div className="flex items-center justify-between gap-2 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-2 px-4 py-1.5">
           {/* Language first (left) — the table bar moved right and became the
               session entry point, because "which table am I" is the question a
               guest asks after scanning, not a label they skim past. */}
@@ -735,13 +1041,16 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                 <button
                   key={l}
                   onClick={() => setLang(l)}
+                  lang={l}
+                  aria-label={l === "el" ? "Ελληνικά" : "English"}
+                  aria-pressed={lang === l}
                   className={cn(
-                    "px-2.5 py-1 text-[11px] font-extrabold uppercase transition-colors",
+                    "min-h-10 min-w-11 px-2.5 py-1 text-[11px] font-extrabold transition-colors",
                     lang === l ? "text-ink" : "text-fog hover:text-cream",
                   )}
                   style={lang === l ? { background: acc } : undefined}
                 >
-                  {l}
+                  {l === "el" ? "ΕΛ" : "EN"}
                 </button>
               ))}
             </div>
@@ -768,9 +1077,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
             )}
             <span className="min-w-0 truncate text-[11px] font-bold leading-tight text-cream">
               {table
-                ? lang === "el" && /^\d+$/.test(table.label)
-                  ? `Τραπέζι ${table.label}`
-                  : formatTableLabel(table.label)
+                ? tableText(table.label, lang)
                 : lang === "el"
                   ? "Προεπισκόπηση μενού"
                   : "Menu preview"}
@@ -799,8 +1106,8 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search drinks & dishes…"
-              className="input !rounded-full !pl-8 text-sm"
+              placeholder={lang === "el" ? "Αναζήτηση ποτών & πιάτων…" : "Search drinks & dishes…"}
+              className="input !rounded-full !pl-8 text-base"
             />
           </div>
           <div className="no-scrollbar -mx-4 mt-2.5 flex gap-2 overflow-x-auto px-4">
@@ -834,7 +1141,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         )}
         {!table && (
           <p className="mt-4 rounded-xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold-2">
-            Scan the QR code on your table to order from your seat.
+            {lang === "el"
+              ? "Σαρώστε τον κωδικό QR στο τραπέζι σας για να παραγγείλετε από τη θέση σας."
+              : "Scan the QR code on your table to order from your seat."}
           </p>
         )}
         {payResult === "paid" && (
@@ -902,11 +1211,15 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               </p>
               <p className="mt-0.5 text-[11px] leading-tight text-fog">
                 {lang === "el"
-                  ? "Κέρδισε −10% — στείλε την παραγγελία σου τώρα!"
+                  ? "Κερδίστε −10% — στείλτε την παραγγελία σας πριν τελειώσει ο χρόνος!"
                   : "Get −10% off — send your order before time runs out!"}
               </p>
             </div>
-            <span className="rounded-full border border-gold/40 bg-ink px-2.5 py-1 font-mono text-xs font-bold tabular-nums text-gold-2">
+            <span
+              // A clock: the server-rendered value is always a moment behind.
+              suppressHydrationWarning
+              className="rounded-full border border-gold/40 bg-ink px-2.5 py-1 font-mono text-xs font-bold tabular-nums text-gold-2"
+            >
               {fsBadge}
             </span>
           </div>
@@ -916,7 +1229,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
             history={history}
             lang={lang}
             venueName={venue.name}
-            tableLabel={table ? formatTableLabel(table.label) : ""}
+            tableLabel={table ? tableText(table.label, lang) : ""}
           />
         )}
         {passport && passport.enabled && guestId && (
@@ -982,7 +1295,9 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
         )}
         {filteredCats.length === 0 && (
           <p className="py-16 text-center text-sm text-fog">
-            Nothing matches “{query}”.
+            {lang === "el"
+              ? `Δεν βρέθηκε τίποτα για «${query}».`
+              : `Nothing matches “${query}”.`}
           </p>
         )}
         {filteredCats.map((c) => (
@@ -1050,7 +1365,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-ink/85 text-[11px] font-extrabold text-gold-2">
                   {cartCount}
                 </span>
-                <span className="flex-1 text-left">View order</span>
+                <span className="flex-1 text-left">{lang === "el" ? "Δείτε την παραγγελία" : "View order"}</span>
                 <span className="font-extrabold">
                   {money(grandTotal, venue.currency)}
                 </span>
@@ -1121,16 +1436,20 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
 
       {/* cart sheet */}
       {cartOpen && (
-        <Sheet onClose={() => setCartOpen(false)}>
+        <Sheet lang={lang} onClose={() => setCartOpen(false)}>
           <div className="p-5 pb-8">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="serif text-2xl font-semibold text-cream">Your order</h3>
-              <button onClick={() => setCartOpen(false)} className="btn btn-ghost !px-3 !py-1.5 text-xs">
+              <h3 className="serif text-2xl font-semibold text-cream">{lang === "el" ? "Η παραγγελία σας" : "Your order"}</h3>
+              <button
+                onClick={() => setCartOpen(false)}
+                aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
+                className="btn btn-ghost min-h-10 min-w-10 !px-3 !py-1.5 text-xs"
+              >
                 ✕
               </button>
             </div>
             {Object.entries(cart).length === 0 ? (
-              <p className="py-6 text-center text-sm text-fog">Nothing yet — tap a drink to add it.</p>
+              <p className="py-6 text-center text-sm text-fog">{lang === "el" ? "Τίποτα ακόμα — πατήστε ένα ποτό για να το προσθέσετε." : "Nothing yet — tap a drink to add it."}</p>
             ) : (
               <ul className="space-y-1">
                 {Object.entries(cart).map(([id, qty]) => {
@@ -1143,7 +1462,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-bold text-cream">{tName(it)}</p>
                         <p className="text-xs text-fog">
-                          {money(unit, venue.currency)} each
+                          {money(unit, venue.currency)} {lang === "el" ? "το ένα" : "each"}
                           {saved && (
                             <span className="ml-1.5 rounded border border-gold/40 bg-gold/15 px-1 py-px text-[9px] font-extrabold tracking-wider text-gold-2">
                               −10%
@@ -1153,6 +1472,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                       </div>
                       <Stepper
                         compact
+                        lang={lang}
                         qty={qty}
                         onChange={(v) => {
                           if (v <= 0) removeFromCart(id);
@@ -1170,8 +1490,8 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value.slice(0, 200))}
-              placeholder="Note for the bar (optional)…"
-              className="input mt-4 min-h-16 resize-none text-sm"
+              placeholder={lang === "el" ? "Σημείωση για το μπαρ (προαιρετικά)…" : "Note for the bar (optional)…"}
+              className="input mt-4 min-h-16 resize-none text-base"
             />
             {firstDeal && cartCount > 0 && (
               <div className="mt-3 flex items-center justify-between rounded-xl border border-gold/30 bg-gold/[0.08] px-3 py-2">
@@ -1185,7 +1505,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               </div>
             )}
             <div className="mt-3 flex items-center justify-between">
-              <span className="text-sm text-fog">Total</span>
+              <span className="text-sm text-fog">{lang === "el" ? "Σύνολο" : "Total"}</span>
               <span className="serif text-2xl font-semibold" style={{ color: acc }}>
                 {money(grandTotal, venue.currency)}
               </span>
@@ -1201,11 +1521,17 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               className="btn btn-gold mt-4 w-full !py-4 text-sm"
             >
               {sending
-                ? "Sending…"
-                : `Send order · ${money(grandTotal, venue.currency)}`}
+                ? lang === "el"
+                  ? "Αποστολή…"
+                  : "Sending…"
+                : lang === "el"
+                  ? `Αποστολή παραγγελίας · ${money(grandTotal, venue.currency)}`
+                  : `Send order · ${money(grandTotal, venue.currency)}`}
             </button>
             <p className="mt-2 text-center text-[11px] text-fog-2">
-              First order of your visit is confirmed by our staff first.
+              {lang === "el"
+                ? "Η πρώτη παραγγελία της επίσκεψής σας επιβεβαιώνεται πρώτα από το προσωπικό."
+                : "First order of your visit is confirmed by our staff first."}
             </p>
           </div>
         </Sheet>
@@ -1214,19 +1540,17 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
       {/* wheel overlay */}
       {wheelOpen && (
         <WheelOverlay
-          items={menu.categories
-            .flatMap((c) => c.items)
-            .filter((i) => i.isAvailable)}
+          items={wheelItems}
           slug={venue.slug}
           tableId={table?.id ?? null}
           currency={venue.currency}
           lang={lang}
           onClose={() => setWheelOpen(false)}
-          onOrder={(it) =>
-            sendOrder([{ itemId: it.id, qty: 1 }], "wheel").then(() =>
-              setWheelOpen(false),
-            )
-          }
+          onOrder={(it) => {
+            // Goes to the cart like any other item — nothing is sent from here.
+            addToCart(it, 1);
+            setWheelOpen(false);
+          }}
         />
       )}
 
@@ -1234,15 +1558,15 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
           This is the fix for "I cancelled on Viva and had no way back to
           paying": the entry point no longer depends on placing a new order. */}
       {sessionOpen && table && (
-        <Sheet onClose={() => setSessionOpen(false)}>
+        <Sheet lang={lang} onClose={() => setSessionOpen(false)}>
           <div className="space-y-4 p-5 pb-8">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-fog">
                   {lang === "el" ? "Η παρέα σας" : "Your sitting"}
                 </p>
-                <h2 className="mt-1 font-display text-2xl text-cream">
-                  {formatTableLabel(table.label)}
+                <h2 className="serif mt-1 text-2xl text-cream">
+                  {tableText(table.label, lang)}
                 </h2>
                 <p className="mt-1 text-xs leading-relaxed text-fog">
                   {lang === "el"
@@ -1252,7 +1576,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
               </div>
               <button
                 onClick={() => setSessionOpen(false)}
-                className="shrink-0 rounded-full border border-line px-2.5 py-1 text-sm text-fog"
+                className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-full border border-line px-2.5 py-1 text-sm text-fog"
                 aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
               >
                 ✕
@@ -1264,7 +1588,7 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                 <span className="text-xs font-bold uppercase tracking-wide text-fog">
                   {lang === "el" ? "Προς πληρωμή" : "Still to pay"}
                 </span>
-                <span className="font-display text-3xl font-extrabold text-cream">
+                <span className="serif text-3xl font-extrabold text-cream">
                   {tableDue === null
                     ? "—"
                     : `€${tableDue.toFixed(2)}`}
@@ -1320,7 +1644,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
                         </span>
                       </div>
                       <p className="mt-0.5 text-[10px] uppercase tracking-wide text-fog">
-                        {o.createdAt.slice(11, 16)} ·{" "}
+                        {new Date(o.createdAt).toLocaleTimeString(
+                          lang === "el" ? "el-GR" : "en-GB",
+                          { hour: "2-digit", minute: "2-digit" },
+                        )}{" "}
+                        ·{" "}
                         {o.paymentStatus === "paid"
                           ? lang === "el"
                             ? "πληρωμένο"
@@ -1369,7 +1697,11 @@ export default function GuestApp({ menu, table }: GuestAppProps) {
 
       {/* toast */}
       {toast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-6">
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-6"
+        >
           <p className="animate-pop rounded-full border border-gold/40 bg-ink-2 px-4 py-2 text-sm text-gold-2 shadow-glow">
             {toast}
           </p>
@@ -1432,25 +1764,27 @@ function ItemCard(props: {
             {tDesc(item)}
           </p>
         )}
-        <p className={cn("mt-1 text-sm font-extrabold", soldOut ? "text-fog-2" : "text-gold-2")}>
-          {soldOut ? "Sold out" : money(item.price, currency)}
+        <p className={cn("mt-1 flex items-center gap-2 text-sm font-extrabold", soldOut ? "text-fog-2" : "text-gold-2")}>
+          {soldOut ? (lang === "el" ? "Εξαντλήθηκε" : "Sold out") : money(item.price, currency)}
+          {/* Beside the price, not in its own column: on a 390px screen a
+              separate column squeezed the item name down to "Ambrosia S…". */}
+          {!soldOut && pairs.length > 0 && (
+            <span className="rounded border border-gold/30 bg-gold/10 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wide text-gold-2">
+              {lang === "el" ? "ζεύγος −10%" : "pair −10%"}
+            </span>
+          )}
         </p>
       </div>
-      {!soldOut && pairs.length > 0 && (
-        <span className="shrink-0 rounded border border-gold/30 bg-gold/10 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide text-gold-2">
-          pair −10%
-        </span>
-      )}
       {!soldOut && (
         <span
           role="button"
           tabIndex={-1}
-          aria-label={`Add ${tName(item)}`}
+          aria-label={lang === "el" ? `Προσθήκη: ${tName(item)}` : `Add ${tName(item)}`}
           onClick={(e) => {
             e.stopPropagation();
             onQuickAdd();
           }}
-          className="grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-full border border-gold/50 text-lg font-bold text-gold-2 transition-colors group-active:bg-gold/20"
+          className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full border border-gold/50 text-lg font-bold text-gold-2 transition-colors group-active:bg-gold/20"
         >
           +
         </span>
@@ -1459,18 +1793,19 @@ function ItemCard(props: {
   );
 }
 
-function Stepper(props: { qty: number; onChange: (v: number) => void; compact?: boolean }) {
-  const { qty, onChange, compact } = props;
+function Stepper(props: { qty: number; onChange: (v: number) => void; compact?: boolean; lang?: Lang }) {
+  const { qty, onChange, compact, lang } = props;
+  // The ::before pads the tap target to 40px without changing the visual size.
   const cls = compact
-    ? "h-7 w-7 rounded-md text-sm"
-    : "h-9 w-9 rounded-lg text-base";
+    ? "relative h-7 w-7 rounded-md text-sm before:absolute before:-inset-1.5 before:content-['']"
+    : "relative h-9 w-9 rounded-lg text-base before:absolute before:-inset-0.5 before:content-['']";
   return (
     <div className="flex items-center gap-1">
       <button
         type="button"
         onClick={() => onChange(qty - 1)}
         className={cn("btn btn-ghost !p-0", cls)}
-        aria-label="Decrease"
+        aria-label={lang === "el" ? "Μείωση ποσότητας" : "Decrease"}
       >
         −
       </button>
@@ -1481,7 +1816,7 @@ function Stepper(props: { qty: number; onChange: (v: number) => void; compact?: 
         type="button"
         onClick={() => onChange(qty + 1)}
         className={cn("btn btn-ghost !p-0", cls)}
-        aria-label="Increase"
+        aria-label={lang === "el" ? "Αύξηση ποσότητας" : "Increase"}
       >
         +
       </button>
@@ -1489,15 +1824,23 @@ function Stepper(props: { qty: number; onChange: (v: number) => void; compact?: 
   );
 }
 
-function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function Sheet({
+  children,
+  onClose,
+  lang,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  lang?: Lang;
+}) {
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center">
       <button
-        aria-label="Close"
+        aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
         onClick={onClose}
         className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
       />
-      <div className="animate-sheet-up relative w-full max-w-md rounded-t-3xl border-t border-gold/25 bg-panel shadow-[0_-10px_60px_rgba(0,0,0,0.6)]">
+      <div className="animate-sheet-up relative max-h-[92dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-3xl border-t border-gold/25 bg-panel shadow-[0_-10px_60px_rgba(0,0,0,0.6)]">
         <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-line" />
         {children}
       </div>
@@ -1541,7 +1884,7 @@ function ItemModal(props: {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
       <button
-        aria-label="Close"
+        aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
         onClick={onClose}
         className="absolute inset-0 animate-fade-in bg-black/75 backdrop-blur-sm"
       />
@@ -1564,8 +1907,8 @@ function ItemModal(props: {
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-panel to-transparent" />
           <button
             onClick={onClose}
-            aria-label="Close"
-            className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full border border-line bg-ink-2/85 text-lg text-cream backdrop-blur-sm"
+            aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
+            className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-full border border-line bg-ink-2/85 text-lg text-cream backdrop-blur-sm"
           >
             ✕
           </button>
@@ -1601,7 +1944,7 @@ function ItemModal(props: {
           {item.allergens.length > 0 && (
             <div className="mt-3 flex items-center gap-2">
               {item.allergens.map((a) => (
-                <span key={a} title={`Allergen: ${a}`} className="text-sm">
+                <span key={a} title={`${lang === "el" ? "Αλλεργιογόνο" : "Allergen"}: ${a}`} className="text-sm">
                   {allergenEmoji(a)}
                 </span>
               ))}
@@ -1668,7 +2011,7 @@ function ItemModal(props: {
           {/* footer */}
           <div className="mt-5 border-t border-line/70 pt-3">
             <div className="flex items-center justify-between gap-3">
-              <Stepper qty={qty} onChange={onQty} />
+              <Stepper lang={lang} qty={qty} onChange={onQty} />
               <div className="min-w-0 text-right">
                 {side && (
                   <p className="text-[10px] text-fog-2">
@@ -1688,8 +2031,12 @@ function ItemModal(props: {
               className="btn btn-gold mt-3 w-full !py-3.5 text-sm disabled:opacity-40"
             >
               {side
-                ? `Add with ${tName(side)} · ${money(total, currency)}`
-                : `Add to order · ${money(total, currency)}`}
+                ? lang === "el"
+                  ? `Προσθήκη με ${tName(side)} · ${money(total, currency)}`
+                  : `Add with ${tName(side)} · ${money(total, currency)}`
+                : lang === "el"
+                  ? `Προσθήκη στην παραγγελία · ${money(total, currency)}`
+                  : `Add to order · ${money(total, currency)}`}
             </button>
           </div>
         </div>
@@ -1721,34 +2068,43 @@ function OrderScreen(props: {
   /** Live sum of the whole table session. The "Pay" button charges the table,
    *  not this one order, so it must show that number — not order.total. */
   payAmount?: number;
+  /** True when the server granted the first-order −10% on this order. */
+  firstOrderDeal?: boolean;
 }) {
-  const { order, lang, tableLabel, venueName, accent, onBack, onCall, callState, onPay, paying, payAmount } = props;
-  const [tick, setTick] = useState(Date.now());
+  const { order, lang, tableLabel, venueName, accent, onBack, onCall, callState, onPay, paying, payAmount, firstOrderDeal } = props;
+  const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
     const iv = window.setInterval(() => setTick(Date.now()), 30000);
     return () => window.clearInterval(iv);
   }, []);
-  void tick;
 
   const declined = order.status === "declined";
   const terminal = ["served", "closed", "declined"].includes(order.status);
+  // −1 = nothing reached yet: an order still waiting for staff is NOT confirmed.
   const progress: Record<string, number> = {
-    pending_confirm: 0,
+    pending_confirm: -1,
     new: 0,
     making: 1,
     served: 2,
     closed: 2,
     declined: -1,
   };
-  const step = progress[order.status] ?? 0;
+  const step = progress[order.status] ?? -1;
   const isPending = order.status === "pending_confirm";
+  // Nothing is payable until the bar has accepted an order: no "Pay €0.00" button.
+  const canPay =
+    Boolean(onPay) && !declined && !isPending && !(payAmount !== undefined && payAmount <= 0.005);
+  // The server total is the truth. When it is lower than the listed lines
+  // (first-order −10% etc.), say so instead of leaving an unexplained gap.
+  const linesSum = order.lines.reduce((sum, l) => sum + l.price * l.qty, 0);
+  const discount = Math.round((linesSum - order.total) * 100) / 100;
 
   return (
     <div className="mx-auto min-h-screen w-full max-w-md px-5 pb-16 pt-10 text-center text-cream">
       <div className="pointer-events-none fixed inset-x-0 top-0 z-0 mx-auto h-72 max-w-md bg-[radial-gradient(closest-side,rgba(201,164,92,0.16),transparent)]" />
       <div className="relative">
         <p className="serif text-sm tracking-wide text-fog">{venueName}</p>
-        <p className="mt-1 text-xs text-fog">Order for {tableLabel}</p>
+        <p className="mt-1 text-xs text-fog">{lang === "el" ? `Παραγγελία για το ${tableLabel}` : `Order for ${tableLabel}`}</p>
 
         <div className="animate-pop mt-8">
           <div
@@ -1766,33 +2122,46 @@ function OrderScreen(props: {
         </div>
 
         <h1 className="serif mt-5 text-3xl font-semibold">
-          {declined
-            ? "Order not confirmed"
-            : isPending
-              ? "Waiting for staff…"
-              : order.status === "making"
-                ? "The bar is on it!"
-                : order.status === "served" || order.status === "closed"
-                  ? "Enjoy! 🥂"
-                  : "Order received!"}
+          {lang === "el"
+            ? declined
+              ? "Η παραγγελία δεν επιβεβαιώθηκε"
+              : isPending
+                ? "Αναμονή για το προσωπικό…"
+                : order.status === "making"
+                  ? "Το μπαρ ετοιμάζει την παραγγελία!"
+                  : order.status === "served" || order.status === "closed"
+                    ? "Καλή απόλαυση! 🥂"
+                    : "Η παραγγελία ελήφθη!"
+            : declined
+              ? "Order not confirmed"
+              : isPending
+                ? "Waiting for staff…"
+                : order.status === "making"
+                  ? "The bar is on it!"
+                  : order.status === "served" || order.status === "closed"
+                    ? "Enjoy! 🥂"
+                    : "Order received!"}
         </h1>
 
         <div className="mt-2 inline-flex items-baseline gap-2">
-          <span className="serif text-lg text-gold-2">Order #{order.ref}</span>
+          <span className="serif text-lg text-gold-2">{lang === "el" ? "Παραγγελία" : "Order"} #{order.ref}</span>
           <span className="text-xs text-fog-2">
-            · {money(order.total)} · {timeAgo(order.createdAt)}
+            · {money(order.total)} · {timeAgo(order.createdAt, tick, lang)}
           </span>
         </div>
 
         {isPending && (
           <p className="mx-auto mt-4 max-w-xs rounded-xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold-2">
-            You&apos;re the first order of this visit — our staff will confirm
-            you&apos;re seated, then it goes straight to the bar.
+            {lang === "el"
+              ? "Είναι η πρώτη παραγγελία της επίσκεψης — το προσωπικό θα επιβεβαιώσει ότι κάθεστε και μετά πάει κατευθείαν στο μπαρ."
+              : "You\u2019re the first order of this visit — our staff will confirm you\u2019re seated, then it goes straight to the bar."}
           </p>
         )}
         {declined && (
           <p className="mx-auto mt-4 max-w-xs rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            This order could not be confirmed. Please speak to the staff.
+            {lang === "el"
+              ? "Η παραγγελία δεν μπόρεσε να επιβεβαιωθεί. Παρακαλούμε μιλήστε στο προσωπικό."
+              : "This order could not be confirmed. Please speak to the staff."}
           </p>
         )}
 
@@ -1820,9 +2189,12 @@ function OrderScreen(props: {
                 </div>
               ))}
             </div>
-            <div className="mt-2 flex justify-between text-[10px] font-bold uppercase tracking-wide text-fog">
+            <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] font-bold uppercase tracking-normal text-fog">
               {STEPS.map((s) => (
-                <span key={s.key} className="w-16 first:text-left last:text-right">
+                <span
+                  key={s.key}
+                  className="min-w-0 truncate text-center first:text-left last:text-right"
+                >
                   {s.label(lang)}
                 </span>
               ))}
@@ -1842,8 +2214,22 @@ function OrderScreen(props: {
               </div>
             ))}
             <div className="hairline my-2" />
+            {discount >= 0.01 && (
+              <div className="flex items-center justify-between py-1 text-sm text-gold-2">
+                <span>
+                  {firstOrderDeal
+                    ? lang === "el"
+                      ? "Πρώτη παραγγελία −10%"
+                      : "First order −10%"
+                    : lang === "el"
+                      ? "Έκπτωση"
+                      : "Discount"}
+                </span>
+                <span>−{money(discount)}</span>
+              </div>
+            )}
             <div className="flex items-center justify-between text-sm font-bold">
-              <span>Total</span>
+              <span>{lang === "el" ? "Σύνολο" : "Total"}</span>
               <span style={{ color: accent }}>{money(order.total)}</span>
             </div>
           </div>
@@ -1856,7 +2242,7 @@ function OrderScreen(props: {
         )}
 
         <div className="mt-8 flex flex-col gap-2.5">
-          {onPay && !declined && (
+          {canPay && (
             <button
               onClick={onPay}
               disabled={paying}
@@ -1871,7 +2257,7 @@ function OrderScreen(props: {
                   : `Pay ${money(payAmount ?? order.total)}`}
             </button>
           )}
-          {onPay && (
+          {canPay && (
             <p className="text-[11px] leading-relaxed text-fog-2">
               {payAmount !== undefined && payAmount > order.total + 0.005
                 ? lang === "el"
@@ -1884,11 +2270,15 @@ function OrderScreen(props: {
           )}
           {!terminal && (
             <button onClick={onCall} disabled={callState === "sent"} className={cn("btn", callState === "sent" ? "btn-good" : "btn-ghost")}>
-              {callState === "sent" ? "✓ Waiter called" : "🛎️ Call waiter"}
+              {callState === "sent"
+                ? lang === "el" ? "✓ Ο σερβιτόρος ειδοποιήθηκε" : "✓ Waiter called"
+                : lang === "el" ? "🛎️ Κλήση σερβιτόρου" : "🛎️ Call waiter"}
             </button>
           )}
           <button onClick={onBack} className="btn btn-gold">
-            {terminal ? "Back to the menu" : "Keep browsing"}
+            {lang === "el"
+              ? terminal ? "Πίσω στο μενού" : "Συνέχεια περιήγησης"
+              : terminal ? "Back to the menu" : "Keep browsing"}
           </button>
         </div>
       </div>
@@ -1949,17 +2339,29 @@ function WheelOverlay(props: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-5">
-      <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
+      <button aria-label={lang === "el" ? "Κλείσιμο" : "Close"} onClick={onClose} className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
       <div className="animate-pop relative w-full max-w-sm rounded-3xl border border-gold/25 bg-panel p-6 text-center shadow-glow">
-        <button onClick={onClose} className="btn btn-ghost absolute right-3 top-3 !px-2.5 !py-1 text-xs">✕</button>
+        <button
+          onClick={onClose}
+          aria-label={lang === "el" ? "Κλείσιμο" : "Close"}
+          className="btn btn-ghost absolute right-3 top-3 min-h-10 min-w-10 !px-2.5 !py-1 text-xs"
+        >
+          ✕
+        </button>
         <p className="text-2xl">🎡</p>
-        <h3 className="serif text-2xl font-semibold text-cream">Wheel of Luck</h3>
+        <h3 className="serif text-2xl font-semibold text-cream">
+          {lang === "el" ? "Τροχός της Τύχης" : "Wheel of Luck"}
+        </h3>
         <p className="mt-1 text-xs text-fog">
-          {lang === "el" ? "Ο οίκος διαλέγει το ποτό σου!" : "The house picks your drink!"}
+          {lang === "el" ? "Το μαγαζί διαλέγει το ποτό σας!" : "The house picks your drink!"}
         </p>
 
         {!available && (
-          <p className="py-8 text-sm text-fog">No drinks available right now.</p>
+          <p className="py-8 text-sm text-fog">
+            {lang === "el"
+              ? "Δεν υπάρχουν διαθέσιμα ποτά αυτή τη στιγμή."
+              : "No drinks available right now."}
+          </p>
         )}
 
         {available && (
@@ -1999,14 +2401,20 @@ function WheelOverlay(props: {
 
         {!result && (
           <button onClick={spin} disabled={spinning || !available} className="btn btn-gold mt-6 w-full !py-3.5">
-            {spinning ? "Picking your drink…" : "Spin"}
+            {spinning
+              ? lang === "el"
+                ? "Διαλέγουμε το ποτό σας…"
+                : "Picking your drink…"
+              : lang === "el"
+                ? "Γυρίστε τον τροχό"
+                : "Spin"}
           </button>
         )}
 
         {result && (
           <div className="animate-pop mt-5 rounded-2xl border border-gold/30 bg-gold/10 p-4">
             <p className="text-[11px] font-bold uppercase tracking-widest text-gold-2">
-              The wheel chose…
+              {lang === "el" ? "Ο τροχός διάλεξε…" : "The wheel chose…"}
             </p>
             <p className="serif mt-1 text-2xl font-semibold text-cream">
               {lang === "el" && result.nameAlt ? result.nameAlt : result.name}
@@ -2016,10 +2424,10 @@ function WheelOverlay(props: {
             </p>
             <div className="mt-3 flex gap-2">
               <button onClick={() => { setResult(null); spin(); }} disabled={spinning} className="btn btn-ghost flex-1">
-                Spin again
+                {lang === "el" ? "Ξανά" : "Spin again"}
               </button>
               <button onClick={() => onOrder(result)} className="btn btn-gold flex-1">
-                Add to order
+                {lang === "el" ? "Στην παραγγελία" : "Add to order"}
               </button>
             </div>
           </div>
@@ -2077,9 +2485,9 @@ function GuestHistoryPanel({
         </svg>
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-gold-2">
-            {el ? "Οι παραγγελίες σου" : "Your orders"}
+            {el ? "Οι παραγγελίες σας" : "Your orders"}
           </p>
-          <p className="truncate text-sm text-paper/80">
+          <p className="truncate text-sm text-cream/80">
             {el
               ? `${count} ${count === 1 ? "παραγγελία" : "παραγγελίες"} · ${money(history.total)}`
               : `${count} ${count === 1 ? "order" : "orders"} · ${money(history.total)}`}
@@ -2091,7 +2499,7 @@ function GuestHistoryPanel({
           viewBox="0 0 24 24"
           fill="none"
           aria-hidden="true"
-          className={`shrink-0 text-paper/50 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`shrink-0 text-fog transition-transform ${open ? "rotate-180" : ""}`}
         >
           <path
             d="M6 9l6 6 6-6"
@@ -2104,15 +2512,15 @@ function GuestHistoryPanel({
       </button>
       {open && (
         <div className="border-t border-gold/15">
-          <p className="px-4 pt-3 text-[10px] uppercase tracking-[0.12em] text-paper/40">
+          <p className="px-4 pt-3 text-[10px] uppercase tracking-[0.12em] text-fog">
             {venueName} · {tableLabel}
           </p>
           <ul className="px-4 pb-1 pt-2">
             {history.orders.map((o) => (
-              <li key={o.id} className="border-b border-paper/10 py-3 last:border-b-0">
+              <li key={o.id} className="border-b border-line py-3 last:border-b-0">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/50">
-                    #{o.id.slice(-4)} · {timeAgo(o.createdAt)}
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-fog">
+                    #{o.id.slice(-4)} · {timeAgo(o.createdAt, undefined, lang)}
                   </span>
                   <span className="text-sm font-semibold text-gold-2">
                     {money(o.total)}
@@ -2122,13 +2530,13 @@ function GuestHistoryPanel({
                   {o.lines.map((l, i) => (
                     <li
                       key={`${o.id}-${i}`}
-                      className="flex items-baseline justify-between gap-2 text-sm text-paper/80"
+                      className="flex items-baseline justify-between gap-2 text-sm text-cream/80"
                     >
                       <span className="truncate">
                         {l.qty > 1 ? `${l.qty}× ` : ""}
                         {l.name}
                       </span>
-                      <span className="shrink-0 tabular-nums text-paper/60">
+                      <span className="shrink-0 tabular-nums text-fog">
                         {money(l.total)}
                       </span>
                     </li>
@@ -2138,7 +2546,7 @@ function GuestHistoryPanel({
             ))}
           </ul>
           <div className="flex items-baseline justify-between border-t border-gold/20 px-4 py-3">
-            <span className="text-sm font-semibold text-paper/80">
+            <span className="text-sm font-semibold text-cream/80">
               {el ? "Σύνολο" : "Total"}
             </span>
             <span className="text-base font-bold text-gold-2">

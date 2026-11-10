@@ -14,9 +14,16 @@ export function siteHost(): string {
   return siteUrl().replace(/^https?:\/\//, "");
 }
 
-/** Cryptographically random 4-digit PIN (leading zeros kept). */
+/**
+ * Cryptographically random 6-digit PIN (leading zeros kept). Six digits: a
+ * 4-digit PIN is only 10 000 guesses. Never a repeated digit (the settings form
+ * rejects those as too easy).
+ */
 export function randomPin(): string {
-  return String(randomInt(0, 10000)).padStart(4, "0");
+  for (;;) {
+    const pin = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    if (!/^(\d)\1+$/.test(pin) && pin !== "123456" && pin !== "654321") return pin;
+  }
 }
 
 /**

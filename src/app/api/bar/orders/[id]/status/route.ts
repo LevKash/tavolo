@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions } from "@/db/schema";
 import { barDenied, checkBarAccess } from "@/lib/pin";
+import { isUuid } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,10 @@ export async function POST(
   const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "", req);
   if (!venue) {
     return barDenied(body.slug ?? "", req);
+  }
+  // A malformed id can never match a row; answer 404 instead of a database error.
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const next = body.status ?? "";
   // Valid targets are every status some state can move to (TRANSITIONS is keyed
@@ -62,12 +67,21 @@ export async function POST(
       { status: 409 },
     );
   }
-  await db
+  // Conditional on the status we just read, so two screens tapping at once
+  // cannot move the order two steps or resurrect a closed one.
+  const changed = await db
     .update(orders)
     .set({
       status: next,
       closed_at: next === "closed" ? new Date() : order.closed_at,
     })
-    .where(eq(orders.id, id));
+    .where(and(eq(orders.id, id), eq(orders.venue_id, venue.id), eq(orders.status, order.status)))
+    .returning({ id: orders.id });
+  if (changed.length === 0) {
+    return NextResponse.json(
+      { error: "This order was just changed on another screen" },
+      { status: 409 },
+    );
+  }
   return NextResponse.json({ ok: true, status: next });
 }

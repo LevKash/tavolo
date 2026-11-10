@@ -292,6 +292,8 @@ async function doSeed(): Promise<void> {
         wifi_name: "AMBROSIA-GUEST",
         wifi_password: "nectar2024",
         bar_pin: process.env.DEMO_BAR_PIN || randomPin(),
+        // The demo shows the pair deals and the first-order welcome deal.
+        promos_enabled: true,
         plan: "pro",
         is_published: true,
       })

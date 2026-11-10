@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { tables } from "@/db/schema";
 import { openSessionForTable } from "@/lib/core";
 import { barDenied, checkBarAccess } from "@/lib/pin";
+import { isUuid } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,10 @@ export async function POST(
   const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "", req);
   if (!venue) {
     return barDenied(body.slug ?? "", req);
+  }
+  // A malformed id can never match a row; answer 404 instead of a database error.
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const tbl = await db
     .select()

@@ -4,6 +4,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tables } from "@/db/schema";
 import { getVenueBySlug } from "@/lib/core";
+import { clientIp, isUuid, rateLimited } from "@/lib/rate-limit";
+import { siteUrl } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,12 @@ export async function GET(req: NextRequest) {
   const format = sp.get("format") === "png" ? "png" : "svg";
   const size = Math.min(Math.max(Number(sp.get("size") ?? 480) || 480, 96), 1200);
 
+  if (tableId && !isUuid(tableId)) {
+    return NextResponse.json({ error: "Table not found" }, { status: 404 });
+  }
+  if (rateLimited(`qr-ip:${clientIp(req)}`, 120, 60_000)) {
+    return NextResponse.json({ error: "too_many_requests" }, { status: 429 });
+  }
   const venue = await getVenueBySlug(slug);
   if (!venue) {
     return NextResponse.json({ error: "Venue not found" }, { status: 404 });
@@ -29,8 +37,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const base =
-    process.env.NEXT_PUBLIC_BASE_URL ?? new URL(req.url).origin;
+  // Always the configured public address, never the address of this request: a
+  // QR printed from a preview deployment must not point at that preview.
+  const base = siteUrl();
   const target = `${base}/m/${venue.slug}${tableId ? `?table=${tableId}` : ""}`;
 
   const opts = {
@@ -60,9 +69,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: `QR generation failed: ${(err as Error).message}` },
-      { status: 500 },
-    );
+    console.error("[qr] generation failed:", (err as Error).message);
+    return NextResponse.json({ error: "QR generation failed" }, { status: 500 });
   }
 }

@@ -4,6 +4,11 @@ import "@fontsource/cormorant-garamond/400.css";
 import "@fontsource/cormorant-garamond/500.css";
 import "@fontsource/cormorant-garamond/600.css";
 import "@fontsource/cormorant-garamond/700.css";
+// Cormorant Garamond has no Greek glyphs; EB Garamond (Greek subset only) fills in.
+import "@fontsource/eb-garamond/greek-400.css";
+import "@fontsource/eb-garamond/greek-500.css";
+import "@fontsource/eb-garamond/greek-600.css";
+import "@fontsource/eb-garamond/greek-700.css";
 import "@fontsource/manrope/400.css";
 import "@fontsource/manrope/500.css";
 import "@fontsource/manrope/600.css";

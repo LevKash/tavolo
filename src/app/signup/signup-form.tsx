@@ -51,9 +51,9 @@ export default function SignupForm() {
       </div>
       <div>
         <label className="label" htmlFor="password">Password</label>
-        <input id="password" type="password" className="input" required minLength={6}
+        <input id="password" type="password" className="input" required minLength={10}
           value={password} onChange={(e) => setPassword(e.target.value)}
-          placeholder="At least 6 characters" />
+          placeholder="At least 10 characters" />
       </div>
       <div className="hairline !border-line pt-3" />
       <div>

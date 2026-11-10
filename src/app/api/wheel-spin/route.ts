@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { menuItems, tables, wheelSpins } from "@/db/schema";
 import { getVenueBySlug, openSessionForTable } from "@/lib/core";
+import { clientIp, isUuid, rateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -13,17 +14,20 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const slug = (body.slug ?? "").trim();
-  const tableId = body.tableId ?? "";
+  const slug = typeof body.slug === "string" ? body.slug.trim() : "";
+  const tableId = isUuid(body.tableId) ? body.tableId : "";
   if (!slug) {
     return NextResponse.json({ error: "slug is required" }, { status: 400 });
+  }
+  if (rateLimited(`spin-ip:${clientIp(req)}`, 60, 60_000)) {
+    return NextResponse.json({ error: "too_many_requests" }, { status: 429 });
   }
   const venue = await getVenueBySlug(slug);
   if (!venue) {
     return NextResponse.json({ error: "Venue not found" }, { status: 404 });
   }
 
-  let itemId: string | null = body.itemId ?? null;
+  let itemId: string | null = isUuid(body.itemId) ? body.itemId : null;
   if (itemId) {
     const it = await db
       .select()

@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orders, tableSessions } from "@/db/schema";
 import { barDenied, checkBarAccess } from "@/lib/pin";
+import { isUuid } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,10 @@ export async function POST(
   const venue = await checkBarAccess(body.slug ?? "", body.pin ?? "", req);
   if (!venue) {
     return barDenied(body.slug ?? "", req);
+  }
+  // A malformed id can never match a row; answer 404 instead of a database error.
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const row = await db
     .select()
@@ -44,10 +49,13 @@ export async function POST(
   // from the queue together with the declined one.
   const sessionClosed = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`session:${order.table_id}`}))`);
-    await tx
+    const changed = await tx
       .update(orders)
       .set({ status: "declined", closed_at: now })
-      .where(and(eq(orders.id, id), eq(orders.status, "pending_confirm")));
+      .where(and(eq(orders.id, id), eq(orders.status, "pending_confirm")))
+      .returning({ id: orders.id });
+    // Confirmed on another screen a moment ago: leave it alone.
+    if (changed.length === 0) return null;
     const live = await tx
       .select({ id: orders.id })
       .from(orders)
@@ -65,5 +73,11 @@ export async function POST(
       .where(eq(tableSessions.id, order.session_id));
     return true;
   });
+  if (sessionClosed === null) {
+    return NextResponse.json(
+      { error: "This order is not awaiting confirmation" },
+      { status: 409 },
+    );
+  }
   return NextResponse.json({ ok: true, status: "declined", sessionClosed });
 }

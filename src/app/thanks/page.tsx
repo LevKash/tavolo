@@ -60,38 +60,58 @@ export default async function Thanks({ searchParams }: { searchParams: Promise<S
       </div>
 
       <div className="space-y-2">
+        {/* Server component without the guest's language: Greek and English
+            carry equal weight, Greek first. */}
         <h1 className="font-[family-name:var(--font-serif)] text-3xl font-semibold tracking-tight">
-          {paid
-            ? "Thank you for your payment"
-            : confirming
-              ? "Confirming your payment…"
-              : "Payment not confirmed"}
+          <span lang="el" className="block">
+            {paid
+              ? "Ευχαριστούμε για την πληρωμή σας"
+              : confirming
+                ? "Επιβεβαιώνουμε την πληρωμή σας…"
+                : "Η πληρωμή δεν επιβεβαιώθηκε"}
+          </span>
+          <span lang="en" className="mt-1 block">
+            {paid
+              ? "Thank you for your payment"
+              : confirming
+                ? "Confirming your payment…"
+                : "Payment not confirmed"}
+          </span>
         </h1>
-        <p className="text-sm opacity-70">
+        <p lang="el" className="text-sm opacity-70">
+          {paid
+            ? "Η πληρωμή σας ελήφθη. Ζητήστε την απόδειξή σας από το προσωπικό."
+            : confirming
+              ? "Συνήθως χρειάζονται λίγα δευτερόλεπτα. Παρακαλούμε κρατήστε αυτή τη σελίδα ανοιχτή."
+              : "Δεν μπορέσαμε να επιβεβαιώσουμε πληρωμή. Αν η κάρτα σας χρεώθηκε, δείξτε αυτή την οθόνη στο προσωπικό. Διαφορετικά, μπορείτε να δοκιμάσετε ξανά."}
+        </p>
+        <p lang="en" className="text-sm opacity-70">
           {paid
             ? "Your payment was received. Ask the staff for your receipt."
             : confirming
               ? "This usually takes a few seconds. Please keep this page open."
               : "We could not confirm a payment. If your card was charged, show this screen to the staff. Otherwise you can try again."}
         </p>
-        <p className="text-xs opacity-50">
-          {paid
-            ? "Η πληρωμή σας ελήφθη. Ζητήστε την απόδειξη από το προσωπικό."
-            : confirming
-              ? "Επιβεβαιώνουμε την πληρωμή σας. Κρατήστε τη σελίδα ανοιχτή."
-              : "Δεν επιβεβαιώθηκε πληρωμή. Αν η κάρτα χρεώθηκε, δείξτε αυτή την οθόνη στο προσωπικό."}
-        </p>
         {confirming && !refresh && (
-          <p className="text-sm opacity-80">
-            Still waiting? Show this screen to the staff, they can check it.
-          </p>
+          <>
+            <p lang="el" className="text-sm opacity-80">
+              Περιμένετε ακόμα; Δείξτε αυτή την οθόνη στο προσωπικό, μπορούν να το ελέγξουν.
+            </p>
+            <p lang="en" className="text-sm opacity-80">
+              Still waiting? Show this screen to the staff, they can check it.
+            </p>
+          </>
         )}
       </div>
 
       {pay && (
         <div className="w-full rounded-2xl border border-white/10 bg-white/5 px-5 py-4">
           {pay.label && (
-            <div className="text-xs uppercase tracking-widest opacity-50">Table {pay.label}</div>
+            <div className="text-xs uppercase tracking-widest opacity-50">
+              {/^\d+$/.test(pay.label)
+                ? `Τραπέζι ${pay.label} · Table ${pay.label}`
+                : pay.label}
+            </div>
           )}
           <div className="mt-1 text-2xl font-semibold text-white">
             €{(pay.cents / 100).toFixed(2)}
@@ -104,12 +124,13 @@ export default async function Thanks({ searchParams }: { searchParams: Promise<S
           href={back}
           className="w-full rounded-2xl bg-[color:var(--color-gold)] px-6 py-4 text-base font-semibold text-black transition-opacity hover:opacity-90"
         >
-          {paid ? "Back to my menu" : "Try again"}
+          {paid ? "Πίσω στο μενού · Back to the menu" : "Δοκιμάστε ξανά · Try again"}
         </Link>
       ) : (
-        <p className="max-w-xs text-xs opacity-60">
-          Scan the QR code on your table to go back to the menu.
-        </p>
+        <div className="max-w-xs space-y-1 text-xs opacity-60">
+          <p lang="el">Σαρώστε τον κωδικό QR στο τραπέζι σας για να επιστρέψετε στο μενού.</p>
+          <p lang="en">Scan the QR code on your table to go back to the menu.</p>
+        </div>
       )}
     </main>
   );
