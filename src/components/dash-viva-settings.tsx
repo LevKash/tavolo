@@ -20,6 +20,44 @@ const label = "block text-[11px] uppercase tracking-[0.16em] text-fog-2 mb-1.5";
 const field =
   "w-full rounded-lg border border-line bg-white/[0.02] px-3 py-2.5 text-sm text-cream placeholder:text-fog-2/60 focus:border-gold/60 focus:outline-none";
 
+function CopyButton({ value, what }: { value: string; what: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setState("copied");
+    } catch {
+      // Clipboard blocked (permissions / insecure context): the URL stays selectable.
+      setState("failed");
+    }
+    window.setTimeout(() => setState("idle"), 1800);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={`Copy ${what}`}
+      className="btn btn-ghost shrink-0 !px-2.5 !py-1 text-[11px]"
+    >
+      {state === "copied" ? "Copied" : state === "failed" ? "Select & copy" : "Copy"}
+    </button>
+  );
+}
+
+function CopyRow({ value, what, prefix }: { value: string; what: string; prefix?: string }) {
+  return (
+    <div className="mt-1 flex items-start justify-between gap-2">
+      <p className="min-w-0 break-all font-mono text-xs text-cream">
+        {prefix}
+        {value}
+      </p>
+      <CopyButton value={value} what={what} />
+    </div>
+  );
+}
+
 export default function DashVivaSettings({ initial }: { initial: VivaSettingsData }) {
   const [clientId, setClientId] = useState(initial.clientId);
   const [clientSecret, setClientSecret] = useState("");
@@ -104,6 +142,20 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
           the 4-digit payment source linked to your sales channel.
         </p>
 
+        <ol className="mt-4 list-decimal space-y-1.5 rounded-lg border border-line bg-ink/40 py-3 pl-8 pr-3 text-xs leading-relaxed text-fog marker:font-bold marker:text-gold-2">
+          <li>
+            In Viva: <span className="text-cream">Settings → API access</span> — copy the Merchant
+            ID and API Key.
+          </li>
+          <li>Create Smart Checkout credentials (Client ID / Client Secret).</li>
+          <li>Create a payment source and paste the Success and Failure URLs below.</li>
+          <li>
+            Create webhooks “Transaction Payment Created” and “Transaction Reversal Created” with
+            the webhook URL below.
+          </li>
+          <li>Save, then press Test connection — both key pairs must pass.</li>
+        </ol>
+
         <div className="mt-5 grid gap-4">
           <div>
             <span className={label}>Environment</span>
@@ -123,6 +175,10 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
                 </button>
               ))}
             </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-fog">
+              In Demo mode guests are not offered card payment on the live site. Switch to Live to
+              take real money.
+            </p>
             {env === "live" && (
               <p className="mt-2 text-[11px] text-gold-2">
                 Live mode moves real money. Test in Demo first.
@@ -210,10 +266,9 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
 
           <div className="rounded-lg border border-line bg-ink/40 px-3 py-2.5">
             <p className="text-[11px] uppercase tracking-[0.16em] text-fog-2">Webhook URL</p>
-            <p className="mt-1 break-all font-mono text-xs text-cream">{initial.webhookUrl}</p>
+            <CopyRow value={initial.webhookUrl} what="webhook URL" />
             <p className="mt-1.5 text-[11px] leading-relaxed text-fog">
-              Add this in Viva under Settings → API Access → Webhooks, event “Transaction Payment
-              Created”. Paid orders then show a PAID badge on the bar screen so staff can ring the
+              Add this in Viva under Settings → API Access → Webhooks, events “Transaction Payment Created” and “Transaction Reversal Created” (two webhooks, same URL). Paid orders then show a PAID badge on the bar screen so staff can ring the
               receipt. Paying does not close the table.
             </p>
           </div>
@@ -222,8 +277,8 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
             <p className="text-[11px] uppercase tracking-[0.16em] text-fog-2">
               Return URLs (payment source)
             </p>
-            <p className="mt-1 break-all font-mono text-xs text-cream">Success: {initial.successUrl}</p>
-            <p className="mt-1 break-all font-mono text-xs text-cream">Failure: {initial.failureUrl}</p>
+            <CopyRow value={initial.successUrl} what="success URL" prefix="Success: " />
+            <CopyRow value={initial.failureUrl} what="failure URL" prefix="Failure: " />
             <p className="mt-1.5 text-[11px] leading-relaxed text-fog">
               Set these in your Viva payment source (Sales → Online Payments → Websites/Apps) so
               guests come back to Ordavo after paying.
@@ -256,7 +311,7 @@ export default function DashVivaSettings({ initial }: { initial: VivaSettingsDat
             type="button"
             onClick={test}
             disabled={testing}
-            className="btn px-5 py-2.5 text-xs uppercase tracking-[0.14em] disabled:opacity-50"
+            className="btn btn-ghost px-5 py-2.5 text-xs uppercase tracking-[0.14em] disabled:opacity-50"
           >
             {testing ? "Testing…" : "Test connection"}
           </button>

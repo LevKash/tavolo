@@ -406,8 +406,15 @@ export const payments = pgTable(
     merchant_trns: text("merchant_trns").notNull(),
     order_code: text("order_code").notNull().default(""),
     amount_cents: integer("amount_cents").notNull(),
-    // pending | paid | failed | expired
+    // pending | paid | failed | expired | cancelled | refunded
+    // cancelled = replaced by a newer checkout and cancelled at Viva;
+    // refunded = the whole amount was returned in Viva afterwards.
     status: text("status").notNull().default("pending"),
+    // demo | live: the Viva environment the checkout was created in.
+    env: text("env").notNull().default(""),
+    // Returned to the guest in Viva after the payment, in cents.
+    refunded_cents: integer("refunded_cents").notNull().default(0),
+    refunded_at: timestamp("refunded_at", { withTimezone: true, mode: "date" }),
     transaction_id: text("transaction_id").notNull().default(""),
     // Something a human should look at (overlap, amount mismatch, reused tx...).
     needs_attention: boolean("needs_attention").notNull().default(false),
@@ -425,6 +432,8 @@ export const payments = pgTable(
       .where(sql`${t.transaction_id} <> ''`),
     index("payments_venue_status_idx").on(t.venue_id, t.status),
     index("payments_table_idx").on(t.table_id, t.status),
+    index("payments_attention_idx").on(t.venue_id).where(sql`${t.needs_attention}`),
+    index("payments_order_code_idx").on(t.order_code).where(sql`${t.order_code} <> ''`),
   ],
 );
 

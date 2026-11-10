@@ -9,8 +9,11 @@ import { clientIp, rateLimited } from "@/lib/rate-limit";
  * Guest return URL for Viva Smart Checkout (set in the venue's Viva payment
  * source, one fixed pair per source):
  *
- *   success → https://<site>/r?venue=<slug>&s={OrderCode}&t={TransactionId}
- *   failure → https://<site>/r?venue=<slug>&s={OrderCode}&t={TransactionId}&fail=1
+ *   success → https://<site>/r?venue=<slug>
+ *   failure → https://<site>/r?venue=<slug>&fail=1
+ *
+ * Viva appends `t=<transaction id>&s=<order code>` (and more) to these itself.
+ * Older setups saved the URL with `{OrderCode}` placeholders; those still work.
  *
  * The redirect is only a hint. On success we ask Viva about the transaction id
  * right here, on the server, so the payment is recorded even if the guest's

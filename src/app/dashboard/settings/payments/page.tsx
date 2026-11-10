@@ -29,8 +29,9 @@ export default async function VivaSettingsPage() {
     hasApiKey: Boolean(venue.viva_api_key),
     enabled: Boolean(venue.payments_enabled),
     webhookUrl: `${siteUrl()}/api/webhooks/viva/${venue.webhook_token}`,
-    successUrl: `${siteUrl()}/r?venue=${venue.slug}&s={OrderCode}&t={TransactionId}`,
-    failureUrl: `${siteUrl()}/r?venue=${venue.slug}&s={OrderCode}&t={TransactionId}&fail=1`,
+    // Viva appends its own `t` (transaction) and `s` (order code) to these.
+    successUrl: `${siteUrl()}/r?venue=${venue.slug}`,
+    failureUrl: `${siteUrl()}/r?venue=${venue.slug}&fail=1`,
   };
 
   return (

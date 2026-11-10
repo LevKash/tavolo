@@ -9,6 +9,7 @@ vi.mock("@/lib/viva", async (importOriginal) => {
     createPaymentOrder: vi.fn(),
     retrieveTransaction: vi.fn(),
     findPaidTransactionIdsByOrderCode: vi.fn(),
+    cancelPaymentOrder: vi.fn(),
   };
 });
 vi.mock("@/lib/tg", () => ({ notifyOperator: vi.fn() }));
@@ -35,6 +36,7 @@ import {
 } from "@/lib/payments";
 import { notifyOperator } from "@/lib/tg";
 import {
+  cancelPaymentOrder,
   createPaymentOrder,
   findPaidTransactionIdsByOrderCode,
   retrieveTransaction,
@@ -120,6 +122,10 @@ beforeEach(() => {
   vi.mocked(retrieveTransaction).mockReset();
   vi.mocked(notifyOperator).mockReset();
   vi.mocked(findPaidTransactionIdsByOrderCode).mockReset();
+  vi.mocked(findPaidTransactionIdsByOrderCode).mockResolvedValue([]);
+  // Never the real thing: tests must not reach Viva.
+  vi.mocked(cancelPaymentOrder).mockReset();
+  vi.mocked(cancelPaymentOrder).mockResolvedValue(true);
   vi.mocked(createPaymentOrder).mockImplementation(async () => {
     const orderCode = String(++codeCounter);
     return { orderCode, checkoutUrl: `https://demo.vivapayments.com/web/checkout?ref=${orderCode}` };
@@ -194,7 +200,7 @@ describe("creating a payment", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("a changed bill gets a NEW payment and keeps the old one", async () => {
+  it("a changed bill gets a NEW payment and cancels the old checkout at Viva", async () => {
     const f = await fixture();
     await f.addOrder(10);
     const first = await f.pay();
@@ -204,7 +210,10 @@ describe("creating a payment", () => {
     if (!first.ok || !second.ok) return;
     expect(second.paymentId).not.toBe(first.paymentId);
     expect(second.amountCents).toBe(1500);
-    expect((await getPayment(first.paymentId)).status).toBe("pending");
+    // The old checkout can no longer take money: the table cannot pay twice.
+    const old = await getPayment(first.paymentId);
+    expect(vi.mocked(cancelPaymentOrder)).toHaveBeenCalledWith(expect.anything(), old.order_code);
+    expect(old.status).toBe("cancelled");
   });
 
   it("marks the attempt failed when Viva refuses, so a retry works", async () => {

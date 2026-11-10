@@ -21,6 +21,13 @@ import { createHash } from "crypto";
 
 export type VivaEnv = "demo" | "live";
 
+/**
+ * No Viva call may hang a request: a guest is waiting on Pay, and Viva is
+ * waiting on our webhook answer. A timeout surfaces as an error the caller
+ * already handles (retry later / webhook answers 500).
+ */
+export const VIVA_TIMEOUT_MS = 8000;
+
 /** Everything we need from a venue row to talk to its Viva account. */
 export interface VivaCredentials {
   env: VivaEnv;
@@ -67,26 +74,6 @@ export function endpointsFor(env: VivaEnv): VivaEndpoints {
 }
 
 /**
- * Build the Viva credential bundle from a venue row. Returns nulls for missing
- * pieces so callers can use credentialsComplete() to gate the feature.
- */
-export function vivaConfigFromVenue(v: {
-  viva_env: string | null;
-  viva_client_id: string | null;
-  viva_client_secret: string | null;
-  viva_merchant_id: string | null;
-  viva_source_code: string | null;
-}): VivaCredentials {
-  return {
-    env: v.viva_env === "live" ? "live" : "demo",
-    clientId: v.viva_client_id ?? "",
-    clientSecret: v.viva_client_secret ?? "",
-    merchantId: v.viva_merchant_id ?? "",
-    sourceCode: v.viva_source_code ?? "",
-  };
-}
-
-/**
  * A venue can take payments once the merchant pair is present. `sourceCode` is
  * optional: Viva falls back to the merchant's default payment source, and a
  * wrong/unknown code is rejected with 403 (verified against demo-api 2026-11-03).
@@ -122,6 +109,7 @@ export async function getAccessToken(
     },
     body: "grant_type=client_credentials",
     cache: "no-store",
+    signal: AbortSignal.timeout(VIVA_TIMEOUT_MS),
   });
 
   const raw = await res.text();
@@ -166,6 +154,8 @@ export interface CreateOrderArgs {
   customerEmail?: string;
   /** "el-GR" | "en-GB" — the language the checkout page renders in. */
   requestLang?: string;
+  /** Seconds the checkout stays payable. Default 900. */
+  paymentTimeoutSec?: number;
   /** Where Viva sends the guest after a successful payment. */
   successUrl?: string;
   /** Where Viva sends the guest when the payment fails or is cancelled. */
@@ -203,6 +193,10 @@ export async function createPaymentOrder(
     ...(args.successUrl ? { successUrl: args.successUrl } : {}),
     ...(args.failureUrl ? { failureUrl: args.failureUrl } : {}),
     requestLang: args.requestLang ?? "en-GB",
+    // How long the checkout stays payable (seconds; Viva's default is 30 min).
+    // Short on purpose: an abandoned checkout must not be paid long after the
+    // bill has changed.
+    paymentTimeout: args.paymentTimeoutSec ?? 900,
     // Smart Checkout requires this when the order is created server-side.
     allowRecurring: false,
     preauth: false,
@@ -216,6 +210,7 @@ export async function createPaymentOrder(
     },
     body: JSON.stringify(body),
     cache: "no-store",
+    signal: AbortSignal.timeout(VIVA_TIMEOUT_MS),
   });
 
   const raw = await res.text();
@@ -277,6 +272,7 @@ export async function fetchWebhookKey(creds: {
   const res = await fetch(`${ep.legacyApi}/api/messages/config/token`, {
     headers: { Authorization: `Basic ${basic}` },
     cache: "no-store",
+    signal: AbortSignal.timeout(VIVA_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new VivaError(
@@ -298,6 +294,7 @@ export async function retrieveTransaction(
   const res = await fetch(`${ep.transactions}/${encodeURIComponent(transactionId)}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
+    signal: AbortSignal.timeout(VIVA_TIMEOUT_MS),
   });
   const raw = await res.text();
   if (!res.ok) {
@@ -318,7 +315,8 @@ export async function retrieveTransaction(
     merchantTrns: String(json.merchantTrns ?? ""),
     statusId,
     // Verified against a real demo transaction: `amount` is in euros (10 = EUR 10).
-    amountCents: Math.round(Number(json.amount ?? 0) * 100),
+    // NaN (a missing or malformed amount) must never pass an "is it enough?" check.
+    amountCents: Number.isFinite(Number(json.amount)) ? Math.round(Number(json.amount) * 100) : 0,
     currencyCode: String(json.currencyCode ?? ""),
     // Viva reports statusId 'F' once the payment is fully captured.
     paid: statusId.toUpperCase() === "F",
@@ -341,13 +339,47 @@ export async function findPaidTransactionIdsByOrderCode(
   const basic = Buffer.from(`${creds.merchantId}:${creds.apiKey}`).toString("base64");
   const res = await fetch(
     `${ep.legacyApi}/api/transactions?ordercode=${encodeURIComponent(orderCode)}`,
-    { headers: { Authorization: `Basic ${basic}` }, cache: "no-store" },
+    {
+      headers: { Authorization: `Basic ${basic}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(VIVA_TIMEOUT_MS),
+    },
   );
-  if (!res.ok) return [];
+  // "Could not ask" is not "nothing was paid": a rejected API key must be an
+  // error the caller can alert on, never an empty list.
+  if (!res.ok) {
+    throw new VivaError(`Viva order lookup failed (${res.status})`, await res.text().catch(() => ""), res.status);
+  }
   const json = (await res.json().catch(() => ({}))) as {
     Transactions?: { TransactionId?: string; StatusId?: string }[];
   };
   return (json.Transactions ?? [])
     .filter((t) => String(t.StatusId ?? "").toUpperCase() === "F" && t.TransactionId)
     .map((t) => String(t.TransactionId));
+}
+
+/**
+ * Cancel a payment order that has not been paid, so its checkout page stops
+ * accepting money (legacy API, Basic auth MerchantId:ApiKey).
+ * Returns true when Viva confirms the cancellation or no longer knows the order;
+ * false when the order could not be cancelled (already paid, or Viva refused).
+ */
+export async function cancelPaymentOrder(
+  creds: VivaCredentials,
+  orderCode: string,
+): Promise<boolean> {
+  if (!creds.merchantId || !creds.apiKey || !/^\d{6,20}$/.test(orderCode)) return false;
+  const ep = endpointsFor(creds.env);
+  const basic = Buffer.from(`${creds.merchantId}:${creds.apiKey}`).toString("base64");
+  try {
+    const res = await fetch(`${ep.legacyApi}/api/orders/${encodeURIComponent(orderCode)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Basic ${basic}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(VIVA_TIMEOUT_MS),
+    });
+    return res.ok || res.status === 404;
+  } catch {
+    return false;
+  }
 }

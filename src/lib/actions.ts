@@ -41,11 +41,13 @@ import { clearLimit, hitLimit, ipFromForwarded } from "@/lib/rate-limit";
 import { ensureSeeded } from "@/lib/seed";
 import { randomPin, siteUrl } from "@/lib/site";
 import { notifyOperator } from "@/lib/tg";
+import { demoBlocked, resolvePaymentAlert, vivaCreds } from "@/lib/payments";
+import { openSecret, sealSecret } from "@/lib/secrets";
 import {
   credentialsComplete,
+  fetchWebhookKey,
   getAccessToken,
   VivaError,
-  vivaConfigFromVenue,
   type VivaEnv,
 } from "@/lib/viva";
 import { slugify } from "@/lib/util";
@@ -957,7 +959,10 @@ export async function saveVivaSettingsAction(input: {
       .from(venues)
       .where(eq(venues.id, venue.id))
       .limit(1);
-    const secret = clientSecret || existing[0]?.s || "";
+    // Secrets are stored encrypted. A value kept from before is re-sealed too, so
+    // saving the form is enough to migrate an old plaintext row.
+    const secret = sealSecret(clientSecret || openSecret(existing[0]?.s, venue.id), venue.id);
+    const storedApiKey = sealSecret(apiKey || openSecret(existing[0]?.k, venue.id), venue.id);
     if (!clientId || !secret || !merchantId) {
       return { error: "Client ID, Client Secret and Merchant ID are all required." };
     }
@@ -971,7 +976,7 @@ export async function saveVivaSettingsAction(input: {
         viva_client_id: clientId,
         viva_client_secret: secret,
         // Blank keeps the stored key (the UI never echoes it).
-        viva_api_key: apiKey || existing[0]?.k || "",
+        viva_api_key: storedApiKey,
         viva_merchant_id: merchantId,
         viva_source_code: sourceCode,
         viva_env: env,
@@ -981,31 +986,67 @@ export async function saveVivaSettingsAction(input: {
 
     revalidatePath("/dashboard/settings/payments");
     revalidatePath("/dashboard", "layout");
-    return { ok: true, notice: "Saved. Run “Test connection” to confirm the keys work." };
+    const demoNote =
+      input.enabled && demoBlocked({ slug: venue.slug, viva_env: env })
+        ? " Note: in Demo mode guests are NOT offered card payment. Switch to Live when you are ready to take real money."
+        : "";
+    return { ok: true, notice: `Saved. Run “Test connection” to confirm the keys work.${demoNote}` };
   } catch (err) {
     return { error: errText(err) };
   }
 }
 
-/** Ask Viva for an OAuth token with the stored credentials — the cheapest real check. */
+/**
+ * Check BOTH sets of keys against Viva: the OAuth pair (creates checkouts,
+ * verifies transactions) and the API key (webhook verification and the search
+ * that recovers a payment whose notification was lost). A green result with a
+ * wrong API key used to leave payments unrecorded without anyone noticing.
+ */
 export async function testVivaConnectionAction(): Promise<ActionRes> {
   try {
     const venue = await getOwnerVenue();
-    const cfg = vivaConfigFromVenue(venue);
+    const cfg = vivaCreds(venue);
     if (!credentialsComplete(cfg)) {
-      return { error: "Fill in Client ID, Client Secret, Merchant ID and Source Code first." };
+      return { error: "Fill in Client ID, Client Secret and Merchant ID first." };
     }
-    const token = await getAccessToken(cfg);
-    if (!token) return { error: "Viva returned an empty token." };
+    try {
+      const token = await getAccessToken(cfg);
+      if (!token) return { error: "Viva returned an empty token." };
+    } catch (err) {
+      if (err instanceof VivaError) {
+        return { error: `Viva rejected the Client ID / Client Secret (${err.status}). Check them and the Demo/Live switch.` };
+      }
+      throw err;
+    }
+    if (!cfg.apiKey) {
+      return { error: "Client ID and Secret work, but the API Key is missing. It is required to take card payments." };
+    }
+    try {
+      const key = await fetchWebhookKey({ env: cfg.env, merchantId: cfg.merchantId, apiKey: cfg.apiKey });
+      if (!key) return { error: "Viva returned no webhook key for this Merchant ID / API Key." };
+    } catch (err) {
+      if (err instanceof VivaError) {
+        return { error: `Client ID and Secret work, but Viva rejected the Merchant ID / API Key (${err.status}). Without them lost payments cannot be recovered.` };
+      }
+      throw err;
+    }
     return {
       ok: true,
-      notice: `Connected to Viva (${cfg.env}) — merchant ${cfg.merchantId}.`,
+      notice: `Connected to Viva (${cfg.env}): both key pairs work. Merchant ${cfg.merchantId}.`,
     };
   } catch (err) {
-    const e = err as VivaError;
-    if (e instanceof VivaError) {
-      return { error: `Viva rejected the request (${e.status}): ${e.message}` };
-    }
     return { error: errText(err) };
   }
+}
+
+/** The owner has dealt with a flagged payment (refunded it, fixed the receipt). */
+export async function resolvePaymentAlertAction(paymentId: string): Promise<ActionRes> {
+  const venue = await getOwnerVenue();
+  if (typeof paymentId !== "string" || !/^[0-9a-f-]{36}$/i.test(paymentId)) {
+    return { error: "Payment not found." };
+  }
+  const ok = await resolvePaymentAlert(venue.id, paymentId);
+  if (!ok) return { error: "Payment not found." };
+  revalidatePath("/dashboard", "layout");
+  return { ok: true };
 }

@@ -34,7 +34,7 @@ import type {
   VenuePublic,
 } from "@/lib/types";
 import { after } from "next/server";
-import { reconcileVenue } from "@/lib/payments";
+import { demoBlocked, listPaymentAlerts, reconcileVenue } from "@/lib/payments";
 import { paymentsAllowed } from "@/lib/site";
 import {
   FIRST_ORDER_SESSION_MAX_AGE_MS,
@@ -64,7 +64,9 @@ export function toVenuePublic(v: Venue): VenuePublic {
     published: v.is_published,
     passportEnabled: v.passport_enabled,
     // Expose the flag only — never the credentials.
-    paymentsEnabled: paymentsAllowed() && Boolean(v.payments_enabled),
+    // Hidden too when the venue is still on Viva's demo environment: a Pay
+    // button that can only answer "not available" is worse than none.
+    paymentsEnabled: paymentsAllowed() && Boolean(v.payments_enabled) && !demoBlocked(v),
     promosEnabled: Boolean(v.promos_enabled),
   };
 }
@@ -797,6 +799,8 @@ export async function buildBarPayload(venue: Venue): Promise<BarPayload> {
 
   return {
     venue: venuePub,
+    paymentAlerts: await listPaymentAlerts(venue.id),
+    paymentsDemo: venuePub.paymentsEnabled && venue.viva_env !== "live",
     tables: tableRows.map((t) => ({ id: t.id, label: formatTableLabel(t.label) })),
     today: { orders: today.orders, revenue: today.revenue },
     pending,
@@ -952,6 +956,8 @@ export async function buildDashboardDto(venue: Venue): Promise<DashboardDto> {
     },
     openSessionsCount: openRows.length,
     pendingCount: pendingCount[0].n,
+    paymentAlerts: await listPaymentAlerts(venue.id),
+    paymentsDemo: venuePub.paymentsEnabled && venue.viva_env !== "live",
   };
 }
 

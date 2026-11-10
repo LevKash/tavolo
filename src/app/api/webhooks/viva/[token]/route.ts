@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { venues } from "@/db/schema";
 import { reportError } from "@/lib/monitor";
 import { processWebhook } from "@/lib/payments";
+import { openSecret } from "@/lib/secrets";
 import { fetchWebhookKey } from "@/lib/viva";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: str
     const key = await fetchWebhookKey({
       env: venue.viva_env === "live" ? "live" : "demo",
       merchantId: venue.viva_merchant_id,
-      apiKey: venue.viva_api_key,
+      apiKey: openSecret(venue.viva_api_key, venue.id),
     });
     if (!key) return NextResponse.json({ error: "verification_failed" }, { status: 401 });
     return NextResponse.json({ Key: key, key });

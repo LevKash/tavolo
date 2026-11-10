@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { closeTableAction, openTableAction } from "@/lib/actions";
+import { closeTableAction, openTableAction, resolvePaymentAlertAction } from "@/lib/actions";
+import { BAR_STRINGS, paymentAlertText } from "@/lib/bar-i18n";
 import type { DashboardDto } from "@/lib/types";
 import { cn, clock, money, timeAgo } from "@/lib/util";
 
@@ -46,8 +47,72 @@ export default function DashToday(props: { initial: DashboardDto }) {
     refresh();
   }
 
+  async function resolveAlert(id: string) {
+    setBusy(id);
+    try {
+      const res = await resolvePaymentAlertAction(id);
+      if (res?.error) alert(res.error);
+    } catch {
+      alert("Could not mark the payment as handled. Try again.");
+    } finally {
+      setBusy(null);
+    }
+    refresh();
+  }
+
+  const alerts = data.paymentAlerts ?? [];
+  const currency = data.venue.currency;
+
   return (
     <div className="space-y-6">
+      {data.paymentsDemo && (
+        <div
+          role="status"
+          className="rounded-xl border border-dashed border-[#f5b942]/70 bg-[#f5b942]/15 px-4 py-2 text-center text-xs font-extrabold uppercase tracking-widest text-[#ffd98a]"
+        >
+          ⚠ DEMO payments — no real money
+        </div>
+      )}
+
+      {alerts.length > 0 && (
+        <section
+          aria-label="Payments that need attention"
+          className="rounded-2xl border-2 border-danger/60 bg-danger/[0.08] p-5"
+        >
+          <h2 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-widest text-[#ffb0ab]">
+            <span aria-hidden>⚠</span>
+            Payments that need attention · {alerts.length}
+          </h2>
+          <ul className="mt-3 space-y-2">
+            {alerts.map((a) => (
+              <li
+                key={a.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/35 bg-ink/40 px-3 py-2.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="font-bold text-cream">{a.tableLabel}</span>
+                    <span className="text-xs text-fog">
+                      {clock(a.at)} · {timeAgo(a.at)}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-sm leading-snug text-cream">
+                    {paymentAlertText(BAR_STRINGS.en, a, (n) => money(n, currency))}
+                  </p>
+                </div>
+                <button
+                  disabled={busy === a.id}
+                  onClick={() => resolveAlert(a.id)}
+                  className="btn btn-ghost !py-1.5 text-xs"
+                >
+                  {busy === a.id ? "Saving…" : "Mark as handled"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="flex items-end justify-between">
         <div>
           <h1 className="serif text-3xl font-semibold text-cream">Today</h1>

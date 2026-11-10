@@ -2,6 +2,7 @@
 // switch shared by both. Client-safe: no node-only imports.
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import type { PaymentAlertView } from "@/lib/types";
 
 export type BarLang = "en" | "el";
 
@@ -100,6 +101,19 @@ const en = {
   tableOpened: "Table opened",
   openForNoPhones: "Open a table for guests without phones:",
   allQuiet: "All quiet. Orders land here the moment guests send them.",
+
+  // payments that need a human
+  demoPayments: "DEMO payments — no real money",
+  payAlertsTitle: "Payments that need attention",
+  payAlertsOwnerNote: "The owner clears these in the dashboard.",
+  payAlertDouble: (refund: string) => `Paid twice. Refund ${refund} to the guest in Viva.`,
+  payAlertAfterClose: (amount: string) =>
+    `Card payment of ${amount} arrived after the table was closed. Check it was not also paid in cash.`,
+  payAlertRefunded: (refunded: string) =>
+    `${refunded} was refunded in Viva. Check the bill and issue a credit note.`,
+  payAlertUnderpaid: (amount: string) =>
+    `Viva received less than the bill (${amount}). Check with the guest.`,
+  payAlertOther: (amount: string) => `Payment of ${amount} needs a check in Viva.`,
 };
 
 export type BarDict = typeof en;
@@ -197,9 +211,42 @@ const el: BarDict = {
   tableOpened: "Το τραπέζι άνοιξε",
   openForNoPhones: "Άνοιγμα τραπεζιού για πελάτες χωρίς κινητό:",
   allQuiet: "Όλα ήσυχα. Οι παραγγελίες εμφανίζονται εδώ μόλις τις στείλουν οι πελάτες.",
+
+  // payments that need a human
+  demoPayments: "DEMO πληρωμές — όχι πραγματικά χρήματα",
+  payAlertsTitle: "Πληρωμές που θέλουν έλεγχο",
+  payAlertsOwnerNote: "Ο υπεύθυνος τις κλείνει από τον πίνακα διαχείρισης.",
+  payAlertDouble: (refund) => `Πληρώθηκε δύο φορές. Επιστρέψτε ${refund} στον πελάτη μέσω Viva.`,
+  payAlertAfterClose: (amount) =>
+    `Πληρωμή με κάρτα ${amount} ήρθε αφού έκλεισε το τραπέζι. Ελέγξτε ότι δεν πληρώθηκε και με μετρητά.`,
+  payAlertRefunded: (refunded) =>
+    `Επιστράφηκαν ${refunded} μέσω Viva. Ελέγξτε τον λογαριασμό και εκδώστε πιστωτικό.`,
+  payAlertUnderpaid: (amount) =>
+    `Η Viva έλαβε λιγότερα από τον λογαριασμό (${amount}). Ελέγξτε με τον πελάτη.`,
+  payAlertOther: (amount) => `Η πληρωμή ${amount} θέλει έλεγχο στη Viva.`,
 };
 
 export const BAR_STRINGS: Record<BarLang, BarDict> = { en, el };
+
+/** One-line explanation of a payment alert, amounts already formatted. */
+export function paymentAlertText(
+  t: BarDict,
+  alert: { kind: PaymentAlertView["kind"]; amount: number; refunded: number },
+  fmt: (n: number) => string,
+) {
+  switch (alert.kind) {
+    case "double_payment":
+      return t.payAlertDouble(fmt(alert.refunded));
+    case "paid_after_close":
+      return t.payAlertAfterClose(fmt(alert.amount));
+    case "refunded":
+      return t.payAlertRefunded(fmt(alert.refunded));
+    case "underpaid":
+      return t.payAlertUnderpaid(fmt(alert.amount));
+    default:
+      return t.payAlertOther(fmt(alert.amount));
+  }
+}
 
 /**
  * Table labels arrive from the server in English ("Table 12", "Bar").

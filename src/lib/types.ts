@@ -123,8 +123,25 @@ export interface TableInfo {
   label: string;
 }
 
+/** A payment a human must look at (double payment, refund, paid after close...). */
+export interface PaymentAlertView {
+  id: string;
+  tableLabel: string;
+  /** What happened, as a stable code the screens translate. */
+  kind: "double_payment" | "paid_after_close" | "refunded" | "underpaid" | "other";
+  /** The amount of the payment, in the venue currency. */
+  amount: number;
+  /** For refunds: how much went back to the guest. For a double payment: how much to return. */
+  refunded: number;
+  at: string;
+}
+
 export interface BarPayload {
   venue: VenuePublic;
+  /** Payments that need a human. Usually empty. */
+  paymentAlerts: PaymentAlertView[];
+  /** True when card payments run against Viva's DEMO environment: no real money. */
+  paymentsDemo: boolean;
   tables: TableInfo[];
   today: { orders: number; revenue: number };
   pending: PendingOrderView[];
@@ -167,6 +184,8 @@ export interface DashboardDto {
   };
   openSessionsCount: number;
   pendingCount: number;
+  paymentAlerts: PaymentAlertView[];
+  paymentsDemo: boolean;
 }
 
 /** Guest loyalty passport snapshot (10th cocktail free). */

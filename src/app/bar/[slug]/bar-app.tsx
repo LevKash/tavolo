@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ConnectingScreen,
+  DemoPaymentsStrip,
   LangToggle,
+  PaymentAlerts,
   PinGate,
   SoundButton,
   StaleBanner,
@@ -109,6 +111,7 @@ export default function BarApp(props: {
       {/* header */}
       <header className="sticky top-0 z-30 border-b border-line bg-ink-2/90 backdrop-blur">
         {stale && <StaleBanner t={t} lang={lang} lastOkAt={lastOkAt} now={now} />}
+        {data.paymentsDemo && <DemoPaymentsStrip label={t.demoPayments} />}
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-5 py-3">
           <div className="flex items-center gap-3">
             <span className="relative flex h-2.5 w-2.5" title={stale ? t.offline : t.live}>
@@ -170,6 +173,13 @@ export default function BarApp(props: {
       {/* body */}
       <div className="mx-auto mt-6 grid max-w-7xl gap-6 px-5 lg:grid-cols-[1fr_340px]">
         <div className="min-w-0 space-y-8">
+          <PaymentAlerts
+            t={t}
+            lang={lang}
+            alerts={data.paymentAlerts}
+            currency={data.venue.currency}
+            now={now}
+          />
           {/* awaiting confirmation — grey, bartender may double as waiter */}
           <section aria-label={t.awaitingConfirmation}>
             <div className={cn("rounded-2xl border p-4", data.pending.length > 0 ? "border-gold/25 bg-white/[0.02]" : "border-line bg-transparent")}>

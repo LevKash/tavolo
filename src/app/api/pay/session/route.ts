@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
 const MESSAGES: Record<string, string> = {
   nothing_to_pay: "Nothing to pay right now. Orders can be paid once the bar has accepted them.",
   payments_not_configured: "Card payment is not available at this venue.",
+  payments_demo_mode: "Card payment is not available at this venue yet.",
+  bill_changed: "The bill has just changed. Please tap Pay again.",
   payment_in_progress: "A payment is already being prepared. Please wait a moment and try again.",
   payment_provider_error: "The payment service did not answer. Please try again.",
 };

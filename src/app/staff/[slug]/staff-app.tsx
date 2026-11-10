@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ConnectingScreen,
+  DemoPaymentsStrip,
   LangToggle,
+  PaymentAlerts,
   PinGate,
   SoundButton,
   StaleBanner,
@@ -110,6 +112,7 @@ export default function StaffApp(props: {
     <main className="min-h-screen pb-16">
       <div className="border-b border-line bg-ink-2/80 sticky top-0 z-30 backdrop-blur">
         {stale && <StaleBanner t={t} lang={lang} lastOkAt={lastOkAt} now={now} />}
+        {payload.paymentsDemo && <DemoPaymentsStrip label={t.demoPayments} />}
         <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 px-4 py-3">
           <div className="min-w-0">
             <p className="serif truncate text-lg font-semibold text-cream">{payload.venue.name}</p>
@@ -142,6 +145,13 @@ export default function StaffApp(props: {
       </div>
 
       <div className="mx-auto max-w-3xl space-y-8 px-4 pt-6">
+        <PaymentAlerts
+          t={t}
+          lang={lang}
+          alerts={payload.paymentAlerts}
+          currency={payload.venue.currency}
+          now={now}
+        />
         {/* Awaiting confirmation */}
         <section>
           <SectionTitle

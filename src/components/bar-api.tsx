@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BarPayload } from "@/lib/types";
-import { type BarDict, type BarLang, useBarLang } from "@/lib/bar-i18n";
-import { audioReady, cn, playChime, timeAgo, unlockAudio } from "@/lib/util";
+import type { BarPayload, PaymentAlertView } from "@/lib/types";
+import { type BarDict, type BarLang, paymentAlertText, tableLabelFor, useBarLang } from "@/lib/bar-i18n";
+import { audioReady, cn, money, playChime, timeAgo, unlockAudio } from "@/lib/util";
 
 /** Why the last poll failed ("" when it succeeded). Screens translate it. */
 export type PollError = "" | "locked" | "server" | "network";
@@ -371,6 +371,58 @@ export function StaleBanner(props: { t: BarDict; lang: BarLang; lastOkAt: number
         </p>
       )}
     </div>
+  );
+}
+
+/** Persistent strip: card payments run against Viva's demo environment. */
+export function DemoPaymentsStrip(props: { label: string }) {
+  return (
+    <div
+      role="status"
+      className="border-b border-dashed border-[#f5b942]/70 bg-[#f5b942]/20 px-4 py-1.5 text-center text-xs font-extrabold uppercase tracking-widest text-[#ffd98a] sm:text-sm"
+    >
+      ⚠ {props.label}
+    </div>
+  );
+}
+
+/** Read-only list of payments a human must look at. Renders nothing when empty. */
+export function PaymentAlerts(props: {
+  t: BarDict;
+  lang: BarLang;
+  alerts: PaymentAlertView[];
+  currency: string;
+  now: number;
+}) {
+  const { t, lang, alerts, currency, now } = props;
+  if (alerts.length === 0) return null;
+  return (
+    <section
+      aria-label={t.payAlertsTitle}
+      className="rounded-2xl border-2 border-danger/60 bg-danger/[0.08] p-4"
+    >
+      <h2 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-widest text-[#ffb0ab]">
+        <span aria-hidden>⚠</span>
+        {t.payAlertsTitle}
+        <span className="rounded-full border border-danger/50 px-2 py-0.5 text-[10px]">{alerts.length}</span>
+      </h2>
+      <ul className="mt-3 space-y-2">
+        {alerts.map((a) => (
+          <li key={a.id} className="rounded-xl border border-danger/35 bg-ink/40 px-3 py-2.5">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <span className="text-lg font-extrabold leading-tight text-cream">
+                {tableLabelFor(a.tableLabel, lang)}
+              </span>
+              <span className="text-xs text-fog">{timeAgo(a.at, now, lang)}</span>
+            </div>
+            <p className="mt-0.5 text-sm leading-snug text-cream">
+              {paymentAlertText(t, a, (n) => money(n, currency))}
+            </p>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2.5 text-xs text-fog">{t.payAlertsOwnerNote}</p>
+    </section>
   );
 }
 
