@@ -18,7 +18,7 @@ import { POST as orderPOST } from "@/app/api/order/route";
 import { GET as orderGET } from "@/app/api/orders/[id]/route";
 import { POST as confirmPOST } from "@/app/api/bar/orders/[id]/confirm/route";
 import { POST as declinePOST } from "@/app/api/bar/orders/[id]/decline/route";
-import { expireIdleSessions, placeOrder } from "@/lib/core";
+import { expireIdleSessions, guestOrderHistory, placeOrder } from "@/lib/core";
 import { hitLimit, peekLimit } from "@/lib/rate-limit";
 import { randomPin } from "@/lib/site";
 
@@ -306,5 +306,39 @@ describe("new venue PINs", () => {
       expect(pin).toMatch(/^\d{6}$/);
       expect(pin).not.toMatch(/^(\d)\1+$/);
     }
+  });
+});
+
+describe("guest order history window", () => {
+  it("a phone sees orders from the last 12 hours and not yesterday's", async () => {
+    const f = await fixture();
+    const guestId = randomUUID();
+    const place = () =>
+      placeOrder({
+        venueId: f.venue.id,
+        tableId: f.table.id,
+        lines: [{ itemId: f.beer.id, qty: 1 }],
+        guestId,
+      });
+    const old = await place();
+    const recent = await place();
+    // Push one order 13 hours into the past, as if it were last night's.
+    await db
+      .update(orders)
+      .set({ created_at: new Date(Date.now() - 13 * 60 * 60 * 1000) })
+      .where(eq(orders.id, old.orderId));
+
+    const h = await guestOrderHistory(f.venue.id, guestId);
+    expect(h.orders.map((o) => o.id)).toEqual([recent.orderId]);
+    expect(h.total).toBeGreaterThan(0);
+
+    // And once the recent one ages out too, the list is empty.
+    await db
+      .update(orders)
+      .set({ created_at: new Date(Date.now() - 12.5 * 60 * 60 * 1000) })
+      .where(eq(orders.id, recent.orderId));
+    const empty = await guestOrderHistory(f.venue.id, guestId);
+    expect(empty.orders).toHaveLength(0);
+    expect(empty.total).toBe(0);
   });
 });

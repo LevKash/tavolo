@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   categories,
@@ -383,6 +383,13 @@ export async function runningSessionTotals(venueId: string, sessionIds: string[]
 }
 
 /**
+ * How long a phone keeps seeing its own orders. Matches the 12 h after which an
+ * idle table is closed automatically: yesterday's evening must not show up as
+ * "your orders" when the guest scans the QR again today.
+ */
+export const GUEST_HISTORY_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+/**
  * Everything one guest personally ordered at this venue, newest first, with
  * line items. Powers "your orders" so a returning phone (same QR scan) sees
  * its own history instead of an unexplained table total.
@@ -394,8 +401,10 @@ export async function guestOrderHistory(
   venueId: string,
   guestId: string,
   limit = 30,
+  windowMs = GUEST_HISTORY_WINDOW_MS,
 ): Promise<GuestOrderHistory> {
   if (!isGuestId(guestId)) return { orders: [], total: 0 };
+  const since = new Date(Date.now() - windowMs);
   const rows = await db
     .select({
       id: orders.id,
@@ -406,7 +415,13 @@ export async function guestOrderHistory(
       payment_status: orders.payment_status,
     })
     .from(orders)
-    .where(and(eq(orders.venue_id, venueId), eq(orders.guest_id, guestId)))
+    .where(
+      and(
+        eq(orders.venue_id, venueId),
+        eq(orders.guest_id, guestId),
+        gte(orders.created_at, since),
+      ),
+    )
     .orderBy(desc(orders.created_at))
     .limit(limit);
   if (rows.length === 0) return { orders: [], total: 0 };
