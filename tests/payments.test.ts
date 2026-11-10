@@ -675,6 +675,24 @@ describe("return route /r", () => {
     expect((await getOrder(o.id)).payment_status).toBe("paid");
   });
 
+  it("ignores a placeholder that Viva's own values follow (s and t sent twice)", async () => {
+    const f = await fixture();
+    const o = await f.addOrder(9);
+    const res = await f.pay();
+    if (!res.ok) throw new Error("setup");
+    const p = await getPayment(res.paymentId);
+    const tx = txFor(p);
+    vi.mocked(retrieveTransaction).mockResolvedValueOnce(tx);
+    const { GET } = await import("@/app/r/route");
+    const out = await GET(
+      new Request(
+        `https://x.test/r?venue=${f.venue.slug}&s={OrderCode}&t={TransactionId}&t=${tx.transactionId}&s=${p.order_code}&lang=el`,
+      ),
+    );
+    expect(out.headers.get("location")).toBe(`https://x.test/thanks?p=${p.id}`);
+    expect((await getOrder(o.id)).payment_status).toBe("paid");
+  });
+
   it("works with the venue parameter too, and is not fooled by another venue's slug", async () => {
     const a = await fixture();
     const b = await fixture();

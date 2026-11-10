@@ -22,8 +22,14 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const qs = url.searchParams;
-  const s = qs.get("s") ?? qs.get("orderCode") ?? "";
-  const t = qs.get("t") ?? qs.get("transactionId") ?? "";
+  // A name can arrive twice: when the return URL saved in Viva already carries
+  // `s=` / `t=` (with a placeholder), Viva appends its own real values after
+  // them, and qs.get() would return the placeholder. Take the first value that
+  // has the right shape instead.
+  const pick = (names: string[], shape: RegExp) =>
+    names.flatMap((n) => qs.getAll(n)).find((v) => shape.test(v)) ?? "";
+  const s = pick(["s", "orderCode"], /^\d{6,20}$/);
+  const t = pick(["t", "transactionId"], /^[0-9a-f-]{8,64}$/i);
   const slug = qs.get("venue") ?? "";
   const fail = qs.has("fail") || qs.has("failure");
 
@@ -83,5 +89,10 @@ export async function GET(req: Request) {
   } catch (err) {
     console.error("[r] error:", (err as Error).message);
   }
+  // Names and shapes only, never values: enough to see what Viva really sent.
+  const shape = [...qs.entries()]
+    .map(([k, v]) => `${k.slice(0, 20)}:${/^\d+$/.test(v) ? `digits${v.length}` : /^[0-9a-f-]{8,64}$/i.test(v) ? "id" : `text${v.length}`}`)
+    .join(" ");
+  console.warn(`[r] no payment matched; query shape: ${shape || "(empty)"}`);
   return NextResponse.redirect(new URL("/r/unknown", url.origin), 303);
 }
